@@ -40,6 +40,9 @@ class RecordingOverlay(QObject):
 
         self._wire_hud_signals()
         self._wire_controller_signals()
+        self._hud.set_level_provider(self._controller.input_level)
+        # 起動直後に自動で録音を始めるか（HP Programmable Key 等の「キー 1 回で録音」用）
+        self.auto_record_on_launch = True
 
     def _wire_hud_signals(self) -> None:
         """HUD のユーザー操作シグナルをこの Facade のスロットへ接続する。
@@ -48,9 +51,9 @@ class RecordingOverlay(QObject):
             None: 録音トグル・終了・一覧表示要求を配線する。
         """
         self._hud.record_button_clicked.connect(self.toggle_recording)
-        self._hud.close_button_clicked.connect(self._quit_application)
+        self._hud.close_button_clicked.connect(self.request_quit)
         self._hud.summary_list_requested.connect(self._open_meeting_summary_list_window)
-        self._hud.close_requested_by_user.connect(self._quit_application)
+        self._hud.close_requested_by_user.connect(self.request_quit)
 
     def _wire_controller_signals(self) -> None:
         """コントローラの通知を HUD／一覧の更新と外部公開シグナルへ橋渡しする。
@@ -104,6 +107,17 @@ class RecordingOverlay(QObject):
             None: ``RecordingHudWindow.set_ui_dark`` に委譲する。
         """
         self._hud.set_ui_dark(dark)
+
+    def retry_summarization(self, meeting_id: int) -> None:
+        """一覧から「再要約」が押されたとき、コントローラへ委譲する。
+
+        Args:
+            meeting_id (int): 商談 ID。
+
+        Returns:
+            None
+        """
+        self._controller.retry_summarization(meeting_id)
 
     def toggle_recording(self) -> None:
         """録音の開始または停止をコントローラへ委譲する。
@@ -291,7 +305,8 @@ class RecordingOverlay(QObject):
         self._open_meeting_summary_list_window()
         self._hud.raise_()
         self._hud.activateWindow()
-        QTimer.singleShot(0, self._begin_recording_after_cold_start)
+        if self.auto_record_on_launch:
+            QTimer.singleShot(0, self._begin_recording_after_cold_start)
 
     def bring_to_foreground_from_second_instance(self) -> None:
         """二重起動検知時に、既存の一覧と HUD を前面・アクティブにする。
@@ -323,6 +338,38 @@ class RecordingOverlay(QObject):
         self._hud.show()
         self._hud.raise_()
         self._hud.activateWindow()
+
+    def request_quit(self) -> None:
+        """HUD の × から終了するとき、録音中・要約中なら確認してから終了する。
+
+        Returns:
+            None
+        """
+        if self._app_quit_started:
+            return
+        recording = self._controller.is_recording()
+        busy = self._controller.is_post_stop_pipeline_active()
+        if recording or busy:
+            mb = QMessageBox(self._message_parent())
+            mb.setIcon(QMessageBox.Icon.Warning)
+            mb.setWindowTitle("Speech Summarizer AI")
+            if recording:
+                mb.setText("録音中です。終了しますか？")
+                mb.setInformativeText(
+                    "録音を停止して終了します。ここまでの文字起こしは保存されますが、要約は作成されません。"
+                )
+            else:
+                mb.setText("要約を作成中です。終了しますか？")
+                mb.setInformativeText(
+                    "いま終了すると、この録音の要約は作成されません（文字起こしは保存済みです）。"
+                )
+            b_quit = mb.addButton("終了する", QMessageBox.ButtonRole.DestructiveRole)
+            b_cancel = mb.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+            mb.setDefaultButton(b_cancel)
+            mb.exec()
+            if mb.clickedButton() is not b_quit:
+                return
+        self._quit_application()
 
     def _quit_application(self) -> None:
         """終了処理を開始する（コントローラのシャットダウン後 ``QApplication.quit``）。

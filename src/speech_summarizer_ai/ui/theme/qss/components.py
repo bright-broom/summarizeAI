@@ -155,7 +155,10 @@ def meeting_list_card_title_label_qss(card_text_color: str) -> str:
     Returns:
         str: 13px・透明背景の断片。
     """
-    return f"color: {card_text_color}; font-size: 13px; background: transparent;"
+    return (
+        f"color: {card_text_color}; font-size: 15px; font-weight: 600; "
+        "background: transparent;"
+    )
 
 
 def meeting_list_card_preview_label_qss(secondary_color: str) -> str:

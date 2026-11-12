@@ -42,19 +42,16 @@ from speech_summarizer_ai.data import meetings_repository as meetings_db
 from speech_summarizer_ai.domain.meeting import (
     MeetingListRow,
     ProgressStatus,
-    format_created_at_for_display,
+    format_created_at_relative,
 )
 from speech_summarizer_ai.ui.icons import action_icons
 from speech_summarizer_ai.ui.theme import (
     DEFAULT_UI_DARK_UNSAVED,
     MeetingListTheme,
     apply_application_popup_chrome,
-    card_delete_btn_fg,
     list_summary_card_delete_button_qss,
-    list_summary_card_view_button_qss,
     meeting_detail_theme,
     meeting_list_card_badge_label_qss,
-    meeting_list_card_datetime_label_qss,
     meeting_list_card_preview_label_qss,
     meeting_list_card_title_label_qss,
     meeting_list_header_theme_toggle_qss,
@@ -63,6 +60,7 @@ from speech_summarizer_ai.ui.theme import (
     meeting_list_search_lineedit_qss,
     meeting_list_search_shell_qss,
     meeting_list_theme,
+    meeting_list_ui_is_dark,
     meeting_list_voice_caption_qss,
     list_icon_disabled_muted_on_list_card,
     list_icon_disabled_muted_on_list_page,
@@ -175,12 +173,12 @@ def _progress_status_badge_ja(status: ProgressStatus) -> str:
         str: バッジに表示する文言。
     """
     if status == ProgressStatus.RECORDING:
-        return "録音中"
+        return "● 録音中"
     if status == ProgressStatus.SUMMARIZING:
-        return "要約中"
+        return "要約中…"
     if status == ProgressStatus.SUCCESS:
         return "要約済み"
-    return "失敗"
+    return "要約できませんでした"
 
 
 def _progress_status_badge_colors(
@@ -202,8 +200,8 @@ def _progress_status_badge_colors(
         return ("#0d47a1", "#64b5f6") if not dark else ("#bbdefb", "#1565c0")
     if status == ProgressStatus.SUCCESS:
         return ("#1b5e20", "#81c784") if not dark else ("#c8e6c9", "#2e7d32")
-    # FAILED
-    return ("#4a148c", "#ba68c8") if not dark else ("#e1bee7", "#6a1b9a")
+    # FAILED: 警告（琥珀）系。紫は意味が伝わりにくい。
+    return ("#8a4b00", "#f0b45a") if not dark else ("#ffd59a", "#a86a12")
 
 
 def _progress_status_disables_card(_status: ProgressStatus) -> bool:
@@ -356,7 +354,11 @@ class _SummaryPreviewLabel(QLabel):
 
 
 class _SummaryCard(QFrame):
-    """商談一覧の 1 件分カード（クリック選択・ダブルクリックで詳細）。"""
+    """商談一覧の 1 件分カード（クリックで詳細を開く）。
+
+    情報の優先度: タイトル ＞ 要約の書き出し ＞ 日時。状態バッジは「いつもと違う」状態
+    （録音中・要約中・失敗）のときだけ出し、正常な「要約済み」はノイズになるため出さない。
+    """
 
     def __init__(
         self,
@@ -367,17 +369,19 @@ class _SummaryCard(QFrame):
         on_delete: Callable[[int], None],
         list_theme: MeetingListTheme,
         parent: QWidget | None = None,
+        on_retry: Callable[[int], None] | None = None,
     ) -> None:
         """商談 1 件分のカード UI を構築する。
 
         Args:
             index (int): 表示中リスト内のカードインデックス。
             item (MeetingListRow): 行データ。
-            on_select (Callable[[int], None]): 単一クリック時のコールバック。
-            on_double_click (Callable[[int], None]): ダブルクリックまたは詳細ボタン時のコールバック。
+            on_select (Callable[[int], None]): クリック時の選択コールバック。
+            on_double_click (Callable[[int], None]): 詳細を開くコールバック（クリックで呼ぶ）。
             on_delete (Callable[[int], None]): 削除ボタン時のコールバック。
             list_theme (MeetingListTheme): 一覧テーマ。
             parent (QWidget | None): 親ウィジェット。
+            on_retry (Callable[[int], None] | None): 要約失敗時の「再要約」コールバック。
 
         Returns:
             None: レイアウト・スタイル・シグナル接続を行う。
@@ -396,6 +400,7 @@ class _SummaryCard(QFrame):
             if not self._interaction_enabled
             else Qt.CursorShape.PointingHandCursor
         )
+        self.setToolTip("クリックして要約と文字起こしを開く")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         if not self._interaction_enabled:
             self.setEnabled(False)
@@ -405,88 +410,82 @@ class _SummaryCard(QFrame):
             if self._interaction_enabled
             else summary_card_disabled_surface_bg(list_theme.card_bg)
         )
+        dark = meeting_list_ui_is_dark(list_theme)
+        muted = "#9a9aa4" if dark else "#6b6f76"
+        status = item.progress_status
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 14, 12, 12)
+        root.setSpacing(6)
 
-        tc = list_theme.card_text
-        date_label = QLabel(format_created_at_for_display(item.created_at))
-        date_label.setStyleSheet(
-            meeting_list_card_datetime_label_qss(list_theme.card_datetime_color)
-        )
-
-        # 左右 2 列（左=日時＋タイトル＋要約プレビューを縦積み、右=状態バッジ＋ボタン行を縦積み）
-        main_row = QHBoxLayout()
-        main_row.setSpacing(16)
-        main_row.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        left_col = QWidget()
-        left_col.setStyleSheet(transparent_background_qss())
-        lv = QVBoxLayout(left_col)
-        lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(6)
-        lv.addWidget(date_label)
-
+        # 1 行目: タイトル（主役）＋ 状態バッジ（通常時は出さない）
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        top.setContentsMargins(0, 0, 0, 0)
+        title_text = item.title.strip() or "（タイトル未設定）"
+        if status in (ProgressStatus.RECORDING, ProgressStatus.SUMMARIZING) and (
+            not item.title.strip() or item.title.strip() == "新規録音"
+        ):
+            title_text = "新しい録音"
         title_body = _CappedTitleLabel(
-            item.title,
-            3,
-            meeting_list_card_title_label_qss(tc),
+            title_text,
+            2,
+            meeting_list_card_title_label_qss(list_theme.card_text),
         )
-        lv.addWidget(title_body)
-        if item.summary_preview:
+        top.addWidget(title_body, stretch=1, alignment=Qt.AlignmentFlag.AlignTop)
+        if status != ProgressStatus.SUCCESS:
+            badge = QLabel(_progress_status_badge_ja(status))
+            fg_badge, bd_badge = _progress_status_badge_colors(status, list_theme)
+            badge.setStyleSheet(
+                meeting_list_card_badge_label_qss(card_surface, fg_badge, bd_badge)
+            )
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            top.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(top)
+
+        # 2 行目: 要約の書き出し（Markdown 記号は除去済み）。状態に応じた説明文に置き換える。
+        preview = item.summary_preview
+        if status == ProgressStatus.SUMMARIZING:
+            preview = "AI が要約を作成しています。完了すると自動で表示されます。"
+        elif status == ProgressStatus.RECORDING:
+            preview = "録音中です。クリックするとリアルタイムの文字起こしを表示します。"
+        elif status == ProgressStatus.FAILED:
+            preview = "文字起こしは保存されています。「再要約」で要約をやり直せます。"
+        if preview:
             summary_body = _SummaryPreviewLabel(
-                item.summary_preview,
-                meeting_list_card_preview_label_qss(list_theme.secondary),
+                preview,
+                meeting_list_card_preview_label_qss(muted if status != ProgressStatus.SUCCESS else list_theme.secondary),
             )
-            lv.addWidget(summary_body)
+            root.addWidget(summary_body)
 
-        main_row.addWidget(left_col, stretch=1)
-
-        right_col = QWidget()
-        right_col.setStyleSheet(transparent_background_qss())
-        rv = QVBoxLayout(right_col)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(10)
-        rv.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        badge = QLabel(_progress_status_badge_ja(item.progress_status))
-        fg_badge, bd_badge = _progress_status_badge_colors(
-            item.progress_status, list_theme
+        # 3 行目: 日時（補助情報）＋ 操作
+        bottom = QHBoxLayout()
+        bottom.setSpacing(4)
+        bottom.setContentsMargins(0, 2, 0, 0)
+        date_label = QLabel(format_created_at_relative(item.created_at))
+        date_label.setStyleSheet(
+            f"color: {muted}; font-size: 12px; background: transparent;"
         )
-        badge.setStyleSheet(
-            meeting_list_card_badge_label_qss(card_surface, fg_badge, bd_badge)
-        )
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        rv.addWidget(badge, alignment=Qt.AlignmentFlag.AlignHCenter)
+        bottom.addWidget(date_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        bottom.addStretch(1)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(0)
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        view_btn = QPushButton()
-        view_btn.setText("")
-        v_fg = QColor(list_theme.card_text)
-        v_dis = list_icon_disabled_muted_on_list_card(
-            list_theme, base_fg=v_fg, card_surface_hex=card_surface
-        )
-        view_btn.setIcon(
-            action_icons.merge_icon_normal_and_disabled_pixmaps(
-                action_icons.icon_view_detail(self, color=v_fg),
-                action_icons.icon_view_detail(self, color=v_dis),
-                24,
+        if status == ProgressStatus.FAILED and on_retry is not None:
+            retry_btn = QPushButton("再要約")
+            retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            retry_btn.setToolTip("この録音の文字起こしから、もう一度要約を作成します")
+            accent = "#90caf9" if dark else "#1565c0"
+            hover = "#2c3440" if dark else "#e8f0fb"
+            retry_btn.setStyleSheet(
+                f"QPushButton {{ color: {accent}; background: transparent; border: 1px solid {accent};"
+                " border-radius: 6px; padding: 3px 12px; font-size: 12px; font-weight: 600; }"
+                f"QPushButton:hover {{ background: {hover}; }}"
             )
-        )
-        view_btn.setIconSize(QSize(22, 22))
-        view_btn.setToolTip("詳細を開く")
-        view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        view_btn.setStyleSheet(
-            list_summary_card_view_button_qss(list_theme, card_bg=card_surface)
-        )
-        view_btn.clicked.connect(partial(on_double_click, index))
-        btn_row.addWidget(view_btn)
+            retry_btn.clicked.connect(partial(on_retry, index))
+            bottom.addWidget(retry_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         delete_btn = QPushButton()
         delete_btn.setText("")
-        d_fg = card_delete_btn_fg(list_theme.card_text)
+        d_fg = QColor(muted)
         d_dis = list_icon_disabled_muted_on_list_card(
             list_theme, base_fg=d_fg, card_surface_hex=card_surface
         )
@@ -497,18 +496,17 @@ class _SummaryCard(QFrame):
                 24,
             )
         )
-        delete_btn.setIconSize(QSize(22, 22))
-        delete_btn.setToolTip("この商談を削除")
+        delete_btn.setIconSize(QSize(18, 18))
+        delete_btn.setFixedSize(28, 28)
+        delete_btn.setToolTip("この録音を削除")
         delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         delete_btn.setStyleSheet(
             list_summary_card_delete_button_qss(list_theme, card_bg=card_surface)
+            + "\nQPushButton { min-width: 0px; min-height: 0px; padding: 4px; }"
         )
         delete_btn.clicked.connect(partial(on_delete, index))
-        btn_row.addWidget(delete_btn)
-        rv.addLayout(btn_row)
-
-        main_row.addWidget(right_col, stretch=0)
-        root.addLayout(main_row)
+        bottom.addWidget(delete_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addLayout(bottom)
 
         self.setGraphicsEffect(_summary_card_shadow_effect(self, list_theme))
 
@@ -533,6 +531,21 @@ class _SummaryCard(QFrame):
             self._on_select(self._index)
         super().mousePressEvent(event)
 
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        """クリック（押して同じカード上で離す）で詳細を開く。
+
+        Args:
+            event (QMouseEvent): マウスイベント。
+
+        Returns:
+            None: 基底の ``mouseReleaseEvent`` に委譲する。
+        """
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint()
+        ):
+            self._on_double_click(self._index)
+        super().mouseReleaseEvent(event)
+
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         """左ダブルクリックで詳細オープンを親へ通知する。
 
@@ -542,8 +555,6 @@ class _SummaryCard(QFrame):
         Returns:
             None: 基底の ``mouseDoubleClickEvent`` に委譲する。
         """
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._on_double_click(self._index)
         super().mouseDoubleClickEvent(event)
 
     def apply_selected(self, selected: bool) -> None:
@@ -559,7 +570,8 @@ class _SummaryCard(QFrame):
             summary_card_frame_qss(
                 self._list_theme,
                 interaction_enabled=self._interaction_enabled,
-                selected=selected,
+                # クリックで即詳細を開くため「選択中」の強調は出さない（意味のない青枠を避ける）
+                selected=False,
             )
         )
 
@@ -720,7 +732,7 @@ class MeetingSummaryListWindow(QMainWindow):
         self._record_btn.clicked.connect(self._on_record_clicked)
         header.addWidget(self._record_btn)
 
-        self._voice_label = QLabel("音声モデル選択")
+        self._voice_label = QLabel("文字起こし精度")
         self._voice_label.setStyleSheet(meeting_list_voice_caption_qss(lt.secondary))
         header.addWidget(self._voice_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -734,6 +746,10 @@ class MeetingSummaryListWindow(QMainWindow):
             _default_idx = 0
         self._voice_combo.setCurrentIndex(_default_idx)
         self._voice_combo.setMinimumWidth(140)
+        self._voice_combo.setToolTip(
+            "精度が高いほど正確に文字起こししますが、PC の負荷が上がります。\n"
+            "次に録音を開始したときから反映されます。"
+        )
         self._voice_combo.setStyleSheet(lt.combo_qss)
         self._voice_combo.currentIndexChanged.connect(self._on_stt_model_combo_changed)
         header.addWidget(self._voice_combo)
@@ -770,7 +786,7 @@ class MeetingSummaryListWindow(QMainWindow):
         _search_lay.setSpacing(0)
 
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("タイトル・要約（一覧表示分）で検索")
+        self._search_edit.setPlaceholderText("タイトル・要約を検索")
         self._search_edit.setClearButtonEnabled(True)
         self._search_edit.setMinimumHeight(24)
         self._search_edit.setMinimumWidth(120)
@@ -1152,13 +1168,65 @@ class MeetingSummaryListWindow(QMainWindow):
                 self._on_card_delete,
                 self._list_theme,
                 self._list_host,
+                on_retry=self._on_card_retry,
             )
             self._cards.append(card)
             lay.addWidget(card)
+        if n == 0:
+            lay.addWidget(self._build_empty_state())
         lay.addStretch()
         self._adjust_selected_index_to_interactive_card()
         self._apply_selection_styles()
         self._scroll_meeting_list_to_top()
+
+    def _build_empty_state(self) -> QWidget:
+        """一覧が空のとき（初回・検索ヒットなし）の案内を作る。
+
+        Returns:
+            QWidget: 中央寄せの案内ラベル。
+        """
+        dark = meeting_list_ui_is_dark(self._list_theme)
+        muted = "#9a9aa4" if dark else "#6b6f76"
+        q = self._search_edit.text().strip() if hasattr(self, "_search_edit") else ""
+        if q:
+            head = f"「{q}」に一致する録音はありません"
+            body = "別のキーワードで検索するか、検索欄をクリアしてください。"
+        else:
+            head = "まだ録音がありません"
+            body = (
+                "画面右下の録音ボタン（●）を押すと録音が始まり、\n"
+                "話した内容がその場で文字になります。\n"
+                "停止すると、AI がタイトルと要約を自動で作成します。\n"
+                "音声はこの PC の外に送信されません。"
+            )
+        lab = QLabel(
+            f"<div style='text-align:center'><p style='font-size:15px;font-weight:600;"
+            f"color:{self._list_theme.heading}'>{head}</p>"
+            f"<p style='font-size:12px;color:{muted};line-height:150%'>"
+            + body.replace("\n", "<br>")
+            + "</p></div>"
+        )
+        lab.setTextFormat(Qt.TextFormat.RichText)
+        lab.setWordWrap(False)
+        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lab.setContentsMargins(16, 48, 16, 24)
+        lab.setStyleSheet(transparent_background_qss())
+        return lab
+
+    def _on_card_retry(self, index: int) -> None:
+        """要約に失敗した商談をもう一度要約する。
+
+        Args:
+            index (int): カードインデックス。
+
+        Returns:
+            None: ホストの ``retry_summarization`` に委譲する。
+        """
+        if not (0 <= index < len(self._meeting_ids)):
+            return
+        retry = getattr(self._host, "retry_summarization", None)
+        if callable(retry):
+            retry(self._meeting_ids[index])
 
     def _scroll_meeting_list_to_top(self) -> None:
         """カード再構築後、縦スクロールを先頭（新しい行側）へ戻す。
@@ -1251,7 +1319,8 @@ class MeetingSummaryListWindow(QMainWindow):
         mb = QMessageBox(self)
         mb.setIcon(QMessageBox.Icon.Question)
         mb.setWindowTitle("削除の確認")
-        mb.setText("この商談を削除しますか？")
+        mb.setText("この録音を削除しますか？")
+        mb.setInformativeText("要約と文字起こしも削除され、元に戻せません。")
         btn_delete = mb.addButton("削除", QMessageBox.ButtonRole.DestructiveRole)
         btn_cancel = mb.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
         mb.setDefaultButton(btn_cancel)

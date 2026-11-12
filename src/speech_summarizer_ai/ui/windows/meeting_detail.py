@@ -10,8 +10,19 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-from PySide6.QtCore import QSize, Qt, QSettings, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QShortcut
+from PySide6.QtCore import QMimeData, QSize, Qt, QSettings, QTimer, QUrl
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QKeySequence,
+    QShortcut,
+    QTextBlockFormat,
+    QTextCharFormat,
+    QTextCursor,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -61,7 +72,9 @@ _SUMMARY_EDIT_ICON_SZ = QSize(
 _SUMMARY_EDIT_BTN_MARGIN_RIGHT_PX = 12
 # 要約タブのみ：報告と編集のあいだ（報告は編集の左）
 _SUMMARY_REPORT_EDIT_GAP_PX = 12
-_SUMMARY_REPORT_BTN_MIN_WIDTH_PX = 70
+_SUMMARY_REPORT_BTN_MIN_WIDTH_PX = 32
+# 「コピー」ボタン（要約／文字起こしタブ共通）の幅
+_COPY_BTN_WIDTH_PX = 84
 _SUMMARY_REPORT_CAPTION_FONT_PT_DELTA = 2.0
 _SUMMARY_REPORT_ICON_DISPLAY_PX = 24
 _SUMMARY_REPORT_ICON_CANVAS_PX = 28
@@ -70,7 +83,9 @@ _SUMMARY_REPORT_ICON_SZ = QSize(
 )
 # 要約／文字起こしタブでメタ行右列の幅を一致（要約＝報告＋隙間＋編集、文字起こし＝スペーサのみ）
 _DETAIL_TOOLBAR_RIGHT_COLUMN_WIDTH_PX = (
-    _SUMMARY_REPORT_BTN_MIN_WIDTH_PX
+    _COPY_BTN_WIDTH_PX
+    + _SUMMARY_REPORT_EDIT_GAP_PX
+    + _SUMMARY_REPORT_BTN_MIN_WIDTH_PX
     + _SUMMARY_REPORT_EDIT_GAP_PX
     + _SUMMARY_EDIT_BUTTON_MIN_PX
     + _SUMMARY_EDIT_BTN_MARGIN_RIGHT_PX
@@ -120,6 +135,46 @@ def _summary_save_discard_cancel_dialog(
     if clicked == b_discard:
         return "discard"
     return "cancel"
+
+
+class _ElidedTitleLabel(QLabel):
+    """幅に収まらないタイトルを末尾「…」で 1 行に省略表示するラベル。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def set_full_text(self, text: str) -> None:
+        self._full = text
+        self.setToolTip(text)
+        self._refit()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._refit()
+
+    def _refit(self) -> None:
+        fm = QFontMetrics(self.font())
+        self.setText(
+            fm.elidedText(self._full, Qt.TextElideMode.ElideRight, max(self.width(), 1))
+        )
+
+
+def _copy_text_to_clipboard(plain: str, *, markdown: bool) -> None:
+    """クリップボードへコピーする。Markdown はリッチテキスト（HTML）も併せて載せる。
+
+    メール・Google ドキュメント等ではそのまま見出しや箇条書きとして貼れ、
+    プレーンテキストしか受けない貼り付け先では元の文字列になる。
+    """
+    mime = QMimeData()
+    mime.setText(plain)
+    if markdown:
+        doc = QTextDocument()
+        doc.setMarkdown(plain)
+        mime.setHtml(doc.toHtml())
+    QApplication.clipboard().setMimeData(mime)
 
 
 class MeetingDetailWidget(QWidget):
@@ -229,8 +284,11 @@ class MeetingDetailWidget(QWidget):
         for _w in (left_wrap, right_wrap):
             _w.setStyleSheet(_header_col_bg)
 
+        self._title_label = _ElidedTitleLabel(self._detail_header)
+        self._apply_title_label_style()
+
         hb.addWidget(left_wrap, 1)
-        hb.addStretch(1)
+        hb.addWidget(self._title_label, 6)
         hb.addWidget(right_wrap, 1)
         root.addWidget(self._detail_header)
 
@@ -291,11 +349,14 @@ class MeetingDetailWidget(QWidget):
         """
         self._meeting_id = meeting_id
         self._set_detail_meta_labels(header_meta)
+        rec = meetings_db.get_meeting(self._project_root, meeting_id)
+        title = rec.title.strip() if rec is not None else ""
+        if not title or title == "新規録音":
+            title = "新しい録音"
+        self._title_label.set_full_text(title)
         summary = summary_text if summary_text is not None else ""
         self._baseline_summary = summary
-        self._summary_edit.setReadOnly(True)
-        self._sync_edit_button_appearance()
-        self._summary_edit.setPlainText(summary)
+        self._enter_summary_read_mode()
         lines = transcript_lines if transcript_lines is not None else ()
         self._last_transcript_lines = lines
         self._rebuild_transcript_rows(lines)
@@ -303,9 +364,7 @@ class MeetingDetailWidget(QWidget):
             pass
         elif start_summary_editing:
             self._tabs.setCurrentIndex(0)
-            self._summary_edit.setReadOnly(False)
-            self._sync_edit_button_appearance()
-            QTimer.singleShot(0, self._summary_edit.setFocus)
+            self._enter_summary_edit_mode()
         elif start_on_transcript_tab:
             self._tabs.setCurrentIndex(1)
         else:
@@ -475,6 +534,9 @@ class MeetingDetailWidget(QWidget):
         )
         self._apply_report_button()
         self._apply_summary_edit_button_chrome()
+        self._apply_title_label_style()
+        self._style_copy_button(self._copy_summary_btn)
+        self._style_copy_button(self._copy_transcript_btn)
         self._summary_edit.setStyleSheet(t.summary_edit_qss)
         self._transcript_tab.setStyleSheet(
             meeting_detail_shell_background_qss(t.transcript_shell_bg)
@@ -514,16 +576,12 @@ class MeetingDetailWidget(QWidget):
             if choice == "save":
                 if not self._persist_summary():
                     return False
-            else:
-                self._summary_edit.setPlainText(self._baseline_summary)
-            self._summary_edit.setReadOnly(True)
-            self._sync_edit_button_appearance()
+            self._enter_summary_read_mode()
             return True
         if not self._summary_edit.isReadOnly():
             if not self._persist_summary():
                 return False
-            self._summary_edit.setReadOnly(True)
-            self._sync_edit_button_appearance()
+            self._enter_summary_read_mode()
         return True
 
     def _on_nav_prev_clicked(self) -> None:
@@ -560,7 +618,9 @@ class MeetingDetailWidget(QWidget):
 
         self._summary_meta_label = QLabel()
         self._summary_meta_label.setTextFormat(Qt.TextFormat.PlainText)
-        self._summary_meta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._summary_meta_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self._summary_meta_label.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
@@ -568,8 +628,13 @@ class MeetingDetailWidget(QWidget):
         self._summary_meta_label.setStyleSheet(
             meeting_detail_meta_label_qss(t.meta_color)
         )
+        self._copy_summary_btn = self._copy_button(
+            "要約をコピー（メールやドキュメントには見出し・箇条書きのまま貼り付けできます）"
+        )
+        self._copy_summary_btn.clicked.connect(self._on_copy_summary_clicked)
+
         self._report_btn = QPushButton()
-        self._report_btn.setText("報告")
+        self._report_btn.setText("")
         self._report_btn.setIconSize(_SUMMARY_REPORT_ICON_SZ)
         self._report_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         # 動的プロパティ（UI 挙動は不変）— 自動化・補助が「報告」ボタンを識別しやすくする
@@ -597,10 +662,13 @@ class MeetingDetailWidget(QWidget):
         _edit_col_lay.setSpacing(0)
         _edit_col_lay.addStretch(1)
         _edit_col_lay.addWidget(
-            self._report_btn, alignment=Qt.AlignmentFlag.AlignVCenter
+            self._copy_summary_btn, alignment=Qt.AlignmentFlag.AlignVCenter
         )
         _edit_col_lay.addSpacing(_SUMMARY_REPORT_EDIT_GAP_PX)
         _edit_col_lay.addWidget(self._edit_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _edit_col_lay.addWidget(
+            self._report_btn, alignment=Qt.AlignmentFlag.AlignVCenter
+        )
         tool.addWidget(
             self._summary_edit_toolbar_right, alignment=Qt.AlignmentFlag.AlignVCenter
         )
@@ -641,7 +709,7 @@ class MeetingDetailWidget(QWidget):
         self._report_btn.setFont(cap)
         self._report_btn.setStyleSheet(
             base + f"\nQPushButton {{ color: {lt.card_text}; "
-            f"min-width: {_SUMMARY_REPORT_BTN_MIN_WIDTH_PX}px; padding: 0 4px; }}\n"
+            f"min-width: {_SUMMARY_REPORT_BTN_MIN_WIDTH_PX}px; padding: 0px; }}\n"
         )
 
     def _sync_report_button_appearance(self) -> None:
@@ -662,7 +730,7 @@ class MeetingDetailWidget(QWidget):
                 iz,
             )
         )
-        self._report_btn.setToolTip("AIが生成した不適切なコンテンツを報告する")
+        self._report_btn.setToolTip("AI が生成した不適切な内容を報告する（ブラウザでフォームを開きます）")
 
     def _on_report_inappropriate_content_clicked(self) -> None:
         """Google フォーム（不適切コンテンツ報告）を既定ブラウザで開く。
@@ -672,12 +740,142 @@ class MeetingDetailWidget(QWidget):
         """
         QDesktopServices.openUrl(QUrl(_INAPPROPRIATE_CONTENT_REPORT_FORM_URL))
 
+    def _enter_summary_read_mode(self) -> None:
+        """要約を閲覧モードにし、Markdown を整形表示する（未保存の編集は破棄）。
+
+        Returns:
+            None
+        """
+        self._summary_edit.setReadOnly(True)
+        if self._baseline_summary.strip():
+            self._summary_edit.setMarkdown(self._baseline_summary)
+            self._polish_rendered_summary()
+        else:
+            self._summary_edit.setPlainText("")
+        self._summary_edit.setPlaceholderText(
+            "要約はまだありません。録音を停止すると AI が自動で作成します。"
+        )
+        self._copy_summary_btn.setEnabled(bool(self._baseline_summary.strip()))
+        self._sync_edit_button_appearance()
+
+    def _polish_rendered_summary(self) -> None:
+        """Markdown 表示の行間・見出しサイズを読みやすく整える（日本語向けに行間広め）。
+
+        Returns:
+            None
+        """
+        doc = self._summary_edit.document()
+        base_pt = QApplication.font().pointSizeF()
+        if base_pt <= 0:
+            base_pt = 10.0
+        cur = QTextCursor(doc)
+        block = doc.begin()
+        first = True
+        while block.isValid():
+            cur.setPosition(block.position())
+            bf = block.blockFormat()
+            level = bf.headingLevel()
+            nbf = QTextBlockFormat(bf)
+            nbf.setLineHeight(135, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            if level > 0:
+                nbf.setTopMargin(0 if first else 14)
+                nbf.setBottomMargin(4)
+                cur.setBlockFormat(nbf)
+                cur.movePosition(
+                    QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+                )
+                cf = QTextCharFormat()
+                cf.setFontPointSize(base_pt + (4 if level == 1 else 2))
+                cf.setFontWeight(QFont.Weight.DemiBold)
+                cur.mergeCharFormat(cf)
+            else:
+                nbf.setTopMargin(0)
+                nbf.setBottomMargin(2)
+                cur.setBlockFormat(nbf)
+            first = False
+            block = block.next()
+
+    def _enter_summary_edit_mode(self) -> None:
+        """要約を編集モード（Markdown の元テキストを編集）にする。
+
+        Returns:
+            None
+        """
+        self._summary_edit.setPlainText(self._baseline_summary)
+        self._summary_edit.setReadOnly(False)
+        self._summary_edit.setPlaceholderText("要約を入力（Markdown 可: ## 見出し、- 箇条書き）")
+        self._sync_edit_button_appearance()
+        QTimer.singleShot(0, self._summary_edit.setFocus)
+
+    def _on_copy_summary_clicked(self) -> None:
+        """要約をクリップボードへコピーし、ボタン上で完了を知らせる。
+
+        Returns:
+            None
+        """
+        text = (
+            self._summary_edit.toPlainText()
+            if not self._summary_edit.isReadOnly()
+            else self._baseline_summary
+        )
+        if not text.strip():
+            return
+        _copy_text_to_clipboard(text, markdown=True)
+        self._flash_copied(self._copy_summary_btn)
+
+    def _on_copy_transcript_clicked(self) -> None:
+        """文字起こし全文を「時刻 本文」形式でクリップボードへコピーする。
+
+        Returns:
+            None
+        """
+        lines = self._last_transcript_lines
+        if not lines:
+            return
+        _copy_text_to_clipboard(
+            "\n".join(f"{ts} {tx}" for ts, tx in lines), markdown=False
+        )
+        self._flash_copied(self._copy_transcript_btn)
+
+    def _flash_copied(self, btn: QPushButton) -> None:
+        btn.setText("✓ コピー済")
+        QTimer.singleShot(1600, lambda: btn.setText("コピー"))
+
+    def _copy_button(self, tooltip: str) -> QPushButton:
+        b = QPushButton("コピー")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setFixedSize(_COPY_BTN_WIDTH_PX, _SUMMARY_EDIT_BUTTON_MIN_PX)
+        self._style_copy_button(b)
+        return b
+
+    def _style_copy_button(self, b: QPushButton) -> None:
+        dark = self._scroll_bars_dark()
+        accent = "#90caf9" if dark else "#1565c0"
+        hover = "#2c3440" if dark else "#e8f0fb"
+        dis = "#5a5a62" if dark else "#b8bcc4"
+        b.setStyleSheet(
+            f"QPushButton {{ color: {accent}; background: transparent; border: 1px solid {accent};"
+            " border-radius: 6px; padding: 0 10px; font-size: 13px; font-weight: 600; }"
+            f"QPushButton:hover {{ background: {hover}; }}"
+            f"QPushButton:disabled {{ color: {dis}; border-color: {dis}; }}"
+        )
+
+    def _apply_title_label_style(self) -> None:
+        lt = self._list_header_lt
+        self._title_label.setStyleSheet(
+            f"QLabel {{ color: {lt.heading}; font-size: 17px; font-weight: 600;"
+            " background: transparent; border: none; }"
+        )
+
     def _summary_dirty(self) -> bool:
         """要約が最後に読み込んだ基準から変更されているか。
 
         Returns:
             bool: 未保存の編集がある場合 ``True``。
         """
+        if self._summary_edit.isReadOnly():
+            return False
         return self._summary_edit.toPlainText() != self._baseline_summary
 
     def _refresh_header_meta(self) -> None:
@@ -746,15 +944,10 @@ class MeetingDetailWidget(QWidget):
                 if choice == "save":
                     if not self._persist_summary():
                         return
-                else:
-                    self._summary_edit.setPlainText(self._baseline_summary)
-            self._summary_edit.setReadOnly(True)
-            self._sync_edit_button_appearance()
+            self._enter_summary_read_mode()
             return
 
-        self._summary_edit.setReadOnly(False)
-        self._sync_edit_button_appearance()
-        QTimer.singleShot(0, self._summary_edit.setFocus)
+        self._enter_summary_edit_mode()
 
     def _on_summary_escape_shortcut(self) -> None:
         """要約タブ内で Esc が押されたとき、保存せず閲覧モードに戻す。
@@ -764,9 +957,7 @@ class MeetingDetailWidget(QWidget):
         """
         if self._summary_edit.isReadOnly():
             return
-        self._summary_edit.setPlainText(self._baseline_summary)
-        self._summary_edit.setReadOnly(True)
-        self._sync_edit_button_appearance()
+        self._enter_summary_read_mode()
 
     def _on_back_clicked(self) -> None:
         """「一覧に戻る」押下時。未保存があれば確認ダイアログを出す。
@@ -793,7 +984,9 @@ class MeetingDetailWidget(QWidget):
 
         self._transcript_meta_label = QLabel()
         self._transcript_meta_label.setTextFormat(Qt.TextFormat.PlainText)
-        self._transcript_meta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._transcript_meta_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self._transcript_meta_label.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
@@ -811,6 +1004,13 @@ class MeetingDetailWidget(QWidget):
             _DETAIL_TOOLBAR_RIGHT_COLUMN_WIDTH_PX,
             _SUMMARY_EDIT_BUTTON_MIN_PX,
         )
+        self._transcript_toolbar_spacer.setStyleSheet(transparent_background_qss())
+        _tx_lay = QHBoxLayout(self._transcript_toolbar_spacer)
+        _tx_lay.setContentsMargins(0, 0, _SUMMARY_EDIT_BTN_MARGIN_RIGHT_PX, 0)
+        _tx_lay.addStretch(1)
+        self._copy_transcript_btn = self._copy_button("文字起こし全文を時刻付きでコピー")
+        self._copy_transcript_btn.clicked.connect(self._on_copy_transcript_clicked)
+        _tx_lay.addWidget(self._copy_transcript_btn)
         transcript_tool.addWidget(
             self._transcript_toolbar_spacer,
             alignment=Qt.AlignmentFlag.AlignVCenter,

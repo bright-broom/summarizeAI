@@ -88,6 +88,8 @@ class RecordingController(QObject):
         self._foundry_summarizer: FoundryLocalSummarizer | None = None
         self._foundry_summarizer_lock = threading.Lock()
         self._post_stop_pipeline_active: bool = False
+        # 直近の入力レベル（0.0〜1.0 のピーク）。録音スレッドが書き、UI がポーリングで読む。
+        self._input_level: float = 0.0
 
         self._stt_utterance_for_db.connect(self._persist_stt_line)
         self._stt_session_finished.connect(self._on_stt_worker_finished)
@@ -125,6 +127,49 @@ class RecordingController(QObject):
             停止後パイプラインが有効なら True。
         """
         return self._post_stop_pipeline_active
+
+    def input_level(self) -> float:
+        """録音中の入力レベル（0.0〜1.0）を返す。録音していなければ 0.0。
+
+        Returns:
+            float: 直近ブロックのピーク（減衰付き）。
+        """
+        if self._record_thread is None:
+            return 0.0
+        return min(1.0, self._input_level)
+
+    def retry_summarization(self, meeting_id: int) -> bool:
+        """要約に失敗した（または作り直したい）商談を、保存済みの文字起こしから再要約する。
+
+        Args:
+            meeting_id: 対象の商談 ID。
+
+        Returns:
+            bool: 要約ジョブを開始したら True。
+        """
+        if self._record_thread is not None or self._post_stop_pipeline_active:
+            self.message_info_requested.emit(
+                self._WINDOW_TITLE,
+                "録音中、または別の要約を処理中です。完了してからもう一度お試しください。",
+            )
+            return False
+        rec = meetings_db.get_meeting(self._save_dir, meeting_id)
+        if rec is None:
+            return False
+        if not rec.transcript_lines:
+            self.message_info_requested.emit(
+                self._WINDOW_TITLE,
+                "この録音には文字起こしが無いため、要約を作成できません。\n"
+                "マイクの接続・許可を確認して、もう一度録音してください。",
+            )
+            return False
+        self._set_post_stop_pipeline_active(True)
+        meetings_db.update_meeting_summary(self._save_dir, meeting_id, "")
+        meetings_db.update_meeting_progress_status(
+            self._save_dir, meeting_id, ProgressStatus.SUMMARIZING
+        )
+        self._queue_post_stt_summarization(meeting_id)
+        return True
 
     def recording_controls_interactive(self) -> bool:
         """録音開始／停止 UI が操作可能かどうかを返す。
@@ -543,6 +588,10 @@ class RecordingController(QObject):
 
         def live_cb(chunk: np.ndarray) -> None:
             q.put(chunk)
+            if chunk.size:
+                peak = float(np.abs(chunk.astype(np.int32)).max()) / 32768.0
+                # 表示用に減衰付きで保持（ちらつき防止）
+                self._input_level = max(peak, self._input_level * 0.6)
 
         wav_out = None
         audio_path = self._session_audio_path
@@ -613,6 +662,7 @@ class RecordingController(QObject):
             else:
                 self._session_audio_path = None
             self._stop_event.clear()
+            self._input_level = 0.0
             self._live_queue = queue.Queue()
             self._stt_stop_event = threading.Event()
             self._stt_finish_generation += 1
