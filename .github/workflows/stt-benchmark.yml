@@ -1,0 +1,48 @@
+# 日本語文字起こしの精度・速度を GitHub の Mac で測る（手動実行）。
+# 「Actions」→「STT benchmark」→「Run workflow」。結果は実行結果ページの Summary に表で出る。
+name: STT benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "測るモデル（空白区切り）"
+        required: false
+        default: "base small kotoba"
+      legacy:
+        description: "改善前の処理とも比較する"
+        type: boolean
+        default: true
+  # 文字起こし処理を変更した PR では自動で測る
+  pull_request:
+    paths:
+      - "src/speech_summarizer_ai/stt/**"
+      - "src/speech_summarizer_ai/settings/stt.py"
+      - "scripts/stt_benchmark.py"
+
+jobs:
+  bench:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-mac.txt
+          pip install -e . --no-deps
+
+      - name: Run benchmark
+        env:
+          SSAI_DATA_DIR: ${{ runner.temp }}/ssai
+        run: |
+          MODELS="${{ inputs.models || 'base small kotoba' }}"
+          LEGACY="--legacy"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.legacy }}" != "true" ]; then LEGACY=""; fi
+          python scripts/stt_benchmark.py --models $MODELS $LEGACY | tee "$RUNNER_TEMP/result.md"
+          cat "$RUNNER_TEMP/result.md" >> "$GITHUB_STEP_SUMMARY"

@@ -23,6 +23,76 @@ from speech_summarizer_ai.stt.faster_whisper_engine import FastWhisperTranscribe
 
 _FRAME_SAMPLES_48K_10MS = 480
 
+# ベンチマークで改善前の区切り方（発話中の無音を捨てる）と比較するためのスイッチ。
+LEGACY_DROP_PAUSES = False
+
+# Whisper が無音・雑音から作りがちな定型の幻覚（YouTube 字幕由来）。
+# 強い目印: 会議ではまず出ない語。短い発話に含まれていれば幻覚とみなす。
+_HALLUCINATION_STRONG: tuple[str, ...] = (
+    "ご視聴",
+    "チャンネル登録",
+    "高評価",
+    "最後までご覧いただき",
+    "字幕",
+    "次回もお楽しみに",
+)
+# 弱い目印: 実際の会議でも言う語。発話がほぼこれだけのときに限り幻覚とみなす。
+_HALLUCINATION_WEAK: tuple[str, ...] = (
+    "ありがとうございました",
+    "お疲れ様でした",
+    "おやすみなさい",
+    "ではまた",
+)
+_PUNCT = "。、.!！?？・…「」 "
+
+
+def is_probable_hallucination(text: str) -> bool:
+    """無音・雑音から生成された定型文（幻覚）らしいかを判定する。
+
+    実際の発言に含まれる「ありがとうございました」等は残したいので、弱い目印は
+    発話がほぼそれだけのときに限る。同じ語の連続反復も幻覚とする。
+
+    Args:
+        text: 認識テキスト。
+
+    Returns:
+        bool: 捨てるべきなら ``True``。
+    """
+    t = "".join(text.split()).strip(_PUNCT)
+    if not t:
+        return True
+    if len(t) <= 40 and any(ph in t for ph in _HALLUCINATION_STRONG):
+        return True
+    if any(ph in t for ph in _HALLUCINATION_WEAK):
+        rest = t
+        for ph in _HALLUCINATION_WEAK:
+            rest = rest.replace(ph, "")
+        if len(rest.strip(_PUNCT)) <= 1:
+            return True
+    # 「あああああ」「はいはいはいはい…」のような反復
+    for n in (1, 2, 3, 4):
+        if len(t) >= n * 6:
+            k = len(t) // n
+            if t[:n] * k == t[: n * k]:
+                return True
+    return False
+
+
+def _quietest_cut(buf: np.ndarray, *, search_from: int) -> int:
+    """``buf`` の ``search_from`` 以降で最も静かな 10 ms フレームの境界位置を返す。
+
+    長い発話を最大長で機械的に切ると単語の途中で割れるため、息継ぎ付近で区切る。
+    """
+    f = _FRAME_SAMPLES_48K_10MS
+    start = max(0, (search_from // f) * f)
+    n = (buf.size - start) // f
+    if n <= 1:
+        return buf.size
+    frames = buf[start : start + n * f].astype(np.float32).reshape(n, f)
+    rms = np.sqrt(np.mean(frames * frames, axis=1))
+    i = int(np.argmin(rms))
+    return start + (i + 1) * f
+
 
 def _webrtcvad_module() -> ModuleType | None:
     """``webrtcvad-wheels`` が入っていればモジュールを返す（未インストールなら ``None``）。
@@ -161,8 +231,14 @@ def run_realtime_transcription_loop(
     print(f"[STT] VAD: {vad_label}", flush=True)
 
     silence_need = config.REALTIME_SILENCE_FRAMES_10MS
+    short_silence_need = max(silence_need, config.REALTIME_SHORT_UTTERANCE_SILENCE_FRAMES_10MS)
+    merge_min_samples = int(config.SAMPLE_RATE * config.REALTIME_MERGE_MIN_SECONDS)
     min_samples = config.REALTIME_MIN_UTTERANCE_SAMPLES
     max_samples = int(config.SAMPLE_RATE * config.REALTIME_MAX_UTTERANCE_SECONDS)
+    # 発話内の無音は 0.3 秒まで残す（単語の区切りが分かるように）。それ以上は末尾から削る。
+    keep_trailing_silence = 30 * _FRAME_SAMPLES_48K_10MS
+    # 直前の認識結果（初期プロンプト用）
+    recent_text = ""
 
     pending = np.zeros(0, dtype=np.int16)
     speech_buf = np.zeros(0, dtype=np.int16)
@@ -182,6 +258,7 @@ def run_realtime_transcription_loop(
         Returns:
             None
         """
+        nonlocal recent_text
         if pcm.size < min_samples:
             return
         offset_samps = global_start_samples
@@ -192,14 +269,17 @@ def run_realtime_transcription_loop(
             piece = pcm[:max_samples]
             pcm = pcm[max_samples:]
             piece_t0_sec = offset_samps / sr
+            ctx_chars = config.STT_CONTEXT_PROMPT_CHARS
+            prompt = recent_text[-ctx_chars:] if ctx_chars > 0 else None
             try:
                 result = tr_use.transcribe_int16_mono(
                     piece,
                     sample_rate=sr,
                     language="ja",
-                    beam_size=3,
+                    beam_size=config.STT_BEAM_SIZE,
                     vad_filter=False,
                     condition_on_previous_text=False,
+                    initial_prompt=prompt or None,
                 )
             except Exception as e:
                 emit_error(f"文字起こしエラー: {e}")
@@ -208,15 +288,20 @@ def run_realtime_transcription_loop(
             emitted = False
             for seg in result.segments:
                 st = seg.text.strip()
-                if not st:
+                if not st or is_probable_hallucination(st):
+                    continue
+                # 直前のヒントをそのまま繰り返しただけの出力は捨てる
+                if prompt and len(st) >= 8 and st in prompt:
                     continue
                 g0 = piece_t0_sec + float(seg.start)
                 emit_text(st, g0)
+                recent_text = (recent_text + st)[-max(ctx_chars, 1) * 2 :]
                 emitted = True
-            if not emitted:
+            if not emitted and not result.segments:
                 full = result.text.strip()
-                if full:
+                if full and not is_probable_hallucination(full):
                     emit_text(full, piece_t0_sec)
+                    recent_text = (recent_text + full)[-max(ctx_chars, 1) * 2 :]
 
     def on_silence_flush() -> None:
         """無音が十分続いたときに ``speech_buf`` を 1 発話として ``transcribe_chunk`` へ渡す。
@@ -228,7 +313,10 @@ def run_realtime_transcription_loop(
         if speech_buf.size == 0:
             silence_run = 0
             return
-        buf = speech_buf
+        # 末尾の無音は 0.3 秒だけ残して削る
+        trailing = silence_run * _FRAME_SAMPLES_48K_10MS
+        cut = 0 if LEGACY_DROP_PAUSES else max(0, trailing - keep_trailing_silence)
+        buf = speech_buf[: speech_buf.size - cut] if cut else speech_buf
         start_s = utterance_first_sample
         speech_buf = np.zeros(0, dtype=np.int16)
         silence_run = 0
@@ -254,16 +342,26 @@ def run_realtime_transcription_loop(
                 utterance_first_sample = frame_global_start
             speech_buf = np.concatenate([speech_buf, frame])
             silence_run = 0
-            if speech_buf.size >= max_samples:
-                head = speech_buf[:max_samples]
-                speech_buf = speech_buf[max_samples:]
-                if utterance_first_sample is not None:
-                    transcribe_chunk(head, utterance_first_sample)
-                    utterance_first_sample += max_samples
+        elif speech_buf.size > 0:
+            # 発話中の短い間（息継ぎ）も波形に残す。消すと単語が詰まり誤認識しやすい。
+            if not LEGACY_DROP_PAUSES:
+                speech_buf = np.concatenate([speech_buf, frame])
+            silence_run += 1
+            enough = speech_buf.size >= merge_min_samples
+            if (enough and silence_run >= silence_need) or silence_run >= short_silence_need:
+                on_silence_flush()
+                return
         else:
             silence_run += 1
-            if speech_buf.size > 0 and silence_run >= silence_need:
-                on_silence_flush()
+        if speech_buf.size >= max_samples and utterance_first_sample is not None:
+            # 最大長に達したら、直近 3 秒のうち最も静かな位置で区切る
+            cut = _quietest_cut(speech_buf, search_from=speech_buf.size - 3 * sr)
+            head = speech_buf[:cut]
+            speech_buf = speech_buf[cut:]
+            transcribe_chunk(head, utterance_first_sample)
+            utterance_first_sample += cut
+            if speech_buf.size == 0:
+                utterance_first_sample = None
 
     def feed_pcm(chunk: np.ndarray) -> None:
         """可変長チャンクを ``pending`` に足し、10 ms フレーム単位で ``consume_frame`` に回す。
