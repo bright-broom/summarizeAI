@@ -88,6 +88,8 @@ class RecordingHudWindow(QWidget):
         self._time_label = QLabel("00:00")
         mono = QFont("Consolas", 15)
         if not mono.exactMatch():
+            mono = QFont("Menlo", 15)
+        if not mono.exactMatch():
             mono = QFont("Courier New", 15)
         self._time_label.setFont(mono)
         self._time_label.setAttribute(

@@ -1,0 +1,41 @@
+# macOS 用 .dmg を GitHub の Mac（Apple Silicon）でビルドする。
+# - 「Actions」タブ →「Build macOS DMG」→「Run workflow」で手動実行
+# - v から始まるタグ（例: v0.1.0）を push すると Release に .dmg を添付
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14  # Apple Silicon (arm64)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build .app and .dmg
+        env:
+          PYTHON: python
+        run: ./scripts/build_mac_app.sh --no-install
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpeechSummarizerAI-macOS-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Attach DMG to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg

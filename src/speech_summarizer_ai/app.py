@@ -57,7 +57,11 @@ def _resolve_icon_path() -> Path | None:
     Returns:
         Path | None: 見つかったパス。無ければ ``None``。
     """
-    candidates = ("icons/app.ico", "icons/app.svg")
+    candidates = (
+        ("icons/app.icns", "icons/app.svg")
+        if sys.platform == "darwin"
+        else ("icons/app.ico", "icons/app.svg")
+    )
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         base = Path(getattr(sys, "_MEIPASS"))
         for name in candidates:
@@ -120,12 +124,61 @@ def _prepare_windows_pyside_dlls() -> None:
         ctypes.WinDLL(os.fspath(icuuc))
 
 
+def _redirect_output_when_bundled() -> None:
+    """macOS の .app（PyInstaller）起動時、標準出力をログファイルへ向ける。
+
+    Finder から起動した .app ではコンソールが無く ``print`` の行き先が無い（``None`` の場合は
+    例外になる）ため、``~/Library/Logs/SpeechSummarizerAI.log`` に追記する。
+
+    Returns:
+        None
+    """
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return
+    try:
+        log_dir = Path.home() / "Library" / "Logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        f = open(  # noqa: SIM115 - プロセス終了まで開いたままにする
+            log_dir / "SpeechSummarizerAI.log", "a", encoding="utf-8", buffering=1
+        )
+        sys.stdout = f
+        sys.stderr = f
+    except OSError:
+        pass
+
+
+def _install_macos_app_behaviour(app: QApplication, overlay: object) -> None:
+    """macOS: Dock アイコンのクリックでウィンドウを再表示し、⌘Q でも後始末を行う。
+
+    Args:
+        app: ``QApplication``。
+        overlay: ``RecordingOverlay``。
+
+    Returns:
+        None
+    """
+    if sys.platform != "darwin":
+        return
+    from PySide6.QtCore import Qt  # noqa: PLC0415
+
+    def _on_state(state: Qt.ApplicationState) -> None:
+        if state != Qt.ApplicationState.ApplicationActive:
+            return
+        if any(w.isVisible() and not w.isMinimized() for w in app.topLevelWidgets()):
+            return
+        overlay.bring_to_foreground_from_second_instance()  # type: ignore[attr-defined]
+
+    app.applicationStateChanged.connect(_on_state)
+    app.aboutToQuit.connect(overlay._quit_application)  # type: ignore[attr-defined]
+
+
 def main() -> int:
     """GUI アプリケーションを初期化し、メインループを実行する。
 
     Returns:
         int: ``QApplication.exec()`` の終了コード。
     """
+    _redirect_output_when_bundled()
     _prepare_windows_pyside_dlls()
     _set_windows_app_user_model_id()
 
@@ -157,5 +210,6 @@ def main() -> int:
     _instance_relay.toggle_recording_requested.connect(
         recording_overlay.toggle_recording
     )
+    _install_macos_app_behaviour(app, recording_overlay)
     recording_overlay.show_at_startup()
     return app.exec()

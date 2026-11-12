@@ -43,3 +43,12 @@ FOUNDRY_LLM_MAP_EXTRACT_RETRY_MAX_TOKENS: int = 4096
 
 # Write: 統合メモから最終要約を生成するときの ``max_tokens``。
 FOUNDRY_LLM_MAP_WRITE_MAX_TOKENS: int = 1280
+
+# --- macOS（Foundry Local の代替）---------------------------------------------
+# Apple Silicon: mlx-lm で読み込む Hugging Face リポジトリ（環境変数 SSAI_MLX_MODEL で上書き可）。
+# メモリ 16GB 未満の Mac では "mlx-community/Qwen2.5-3B-Instruct-4bit" などの小さいモデルを推奨。
+MAC_MLX_MODEL_REPO: str = "mlx-community/Qwen2.5-7B-Instruct-4bit"
+
+# Intel Mac / SSAI_LLM_BACKEND=openai 時: OpenAI 互換ローカルサーバー（既定は Ollama）。
+MAC_OPENAI_BASE_URL: str = "http://localhost:11434/v1"
+MAC_OPENAI_MODEL: str = "qwen2.5:7b"

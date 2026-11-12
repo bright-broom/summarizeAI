@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "speech-summarizer-ai"
 version = "0.1.0"
-description = "Speech Summarizer AI — Windows デスクトップ向けの録音・文字起こし・要約アプリ。"
+description = "Speech Summarizer AI — Windows / macOS デスクトップ向けの録音・文字起こし・要約アプリ。"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -17,6 +17,7 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -31,7 +32,11 @@ dependencies = [
     "winrt-Windows.Storage>=2.0; platform_system == 'Windows'",
     "winrt-runtime>=2.0; platform_system == 'Windows'",
     "numpy>=2.0",
-    "PyAudioWPatch>=0.2.12",
+    "PyAudioWPatch>=0.2.12; platform_system == 'Windows'",
+    # macOS: PortAudio(CoreAudio) 経由の録音。wheel に PortAudio が同梱される。
+    "sounddevice>=0.4.6; platform_system == 'Darwin'",
+    # macOS (Apple Silicon): Foundry Local の代替として MLX で要約 LLM を実行。
+    "mlx-lm>=0.20; platform_system == 'Darwin' and platform_machine == 'arm64'",
     "webrtcvad-wheels>=2.0.14",
     "faster-whisper>=1.0.0",
     "ctranslate2>=4.0.0",

@@ -28,6 +28,9 @@ from speech_summarizer_ai.settings.llm import (
     FOUNDRY_LLM_REFINE_MAX_TOKENS,
     FOUNDRY_LLM_TITLE_MAX_CHARS,
     FOUNDRY_LLM_TITLE_MAX_TOKENS,
+    MAC_MLX_MODEL_REPO,
+    MAC_OPENAI_BASE_URL,
+    MAC_OPENAI_MODEL,
 )
 from speech_summarizer_ai.settings.paths import (
     DATABASE_DIR_NAME,
@@ -70,6 +73,9 @@ __all__ = [
     "FOUNDRY_LLM_REFINE_MAX_TOKENS",
     "FOUNDRY_LLM_TITLE_MAX_CHARS",
     "FOUNDRY_LLM_TITLE_MAX_TOKENS",
+    "MAC_MLX_MODEL_REPO",
+    "MAC_OPENAI_BASE_URL",
+    "MAC_OPENAI_MODEL",
     "MODELS_DIR_NAME",
     "MODELS_LLM_SUBDIR",
     "MODELS_STT_SUBDIR",

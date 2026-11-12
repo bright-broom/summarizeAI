@@ -112,6 +112,28 @@ def _windows_user_data_root() -> Path | None:
     )
 
 
+def _macos_user_data_root() -> Path | None:
+    """macOS 用のユーザーデータルート（``~/Library/Application Support/WEEL/SpeechSummarizerAI``）。
+
+    環境変数 ``SSAI_DATA_DIR`` があればそれを優先する。
+
+    Returns:
+        Path | None: macOS 以外では ``None``。
+    """
+    if sys.platform != "darwin":
+        return None
+    override = os.environ.get("SSAI_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return (
+        Path.home()
+        / "Library"
+        / "Application Support"
+        / config.WINDOWS_APPDATA_VENDOR_DIR
+        / config.WINDOWS_APPDATA_APP_DIR
+    )
+
+
 def project_root() -> Path:
     """DB・モデル・セッションの基準ディレクトリ（ユーザーデータルート）を返す。
 
@@ -122,7 +144,7 @@ def project_root() -> Path:
     Returns:
         Path: データルート。存在しない場合は親まで含めて作成する。
     """
-    w = _windows_user_data_root()
+    w = _windows_user_data_root() or _macos_user_data_root()
     root = w if w is not None else _repo_root()
     root.mkdir(parents=True, exist_ok=True)
     return root

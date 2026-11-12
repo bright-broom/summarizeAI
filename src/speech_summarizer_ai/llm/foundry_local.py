@@ -62,6 +62,16 @@ def _import_sdk() -> tuple[type, type]:
     Raises:
         FoundryLocalNotAvailableError: パッケージが未インストールまたは import できない場合。
     """
+    if sys.platform == "darwin":
+        # macOS: Foundry Local（WinML）は使えないため MLX / OpenAI 互換サーバーで代替する。
+        from speech_summarizer_ai.llm.mac_backend import (  # noqa: PLC0415
+            Configuration as MacConfiguration,
+        )
+        from speech_summarizer_ai.llm.mac_backend import (  # noqa: PLC0415
+            FoundryLocalManager as MacManager,
+        )
+
+        return MacConfiguration, MacManager
     try:
         from foundry_local_sdk import Configuration, FoundryLocalManager
 

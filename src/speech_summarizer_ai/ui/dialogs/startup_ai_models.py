@@ -9,6 +9,7 @@ LLM 取得ダイアログの要否は **3 ステップのファイル存在確�
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -110,6 +111,16 @@ def _needs_foundry_llm_download_at_startup(project_root: Path) -> bool:
     Returns:
         bool: 起動時に LLM 取得 UI を表示するなら True。
     """
+    # macOS: MLX 重み（safetensors）の有無で判定。OpenAI 互換サーバー利用時は取得不要。
+    if sys.platform == "darwin":
+        from speech_summarizer_ai.llm import mac_backend  # noqa: PLC0415
+
+        if mac_backend.backend_name() != "mlx":
+            return False
+        return not mac_backend.mlx_weights_present(
+            paths.foundry_llm_cache_directory(project_root)
+        )
+
     # ステップ 1: プロジェクト外キャッシュ設定ならスキップ
     if not config.FOUNDRY_LLM_CACHE_IN_PROJECT:
         return False

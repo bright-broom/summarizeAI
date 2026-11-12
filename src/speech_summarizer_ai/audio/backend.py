@@ -21,10 +21,13 @@ _pa_module = None
 
 
 def _pyaudio() -> Any:
-    """PyAudioWPatch を遅延 import する。"""
+    """PyAudioWPatch（macOS では sounddevice 互換レイヤ）を遅延 import する。"""
     global _pa_module
     if _pa_module is None:
-        import pyaudiowpatch as pyaudio
+        if sys.platform == "darwin":
+            from speech_summarizer_ai.audio import mac_pyaudio_compat as pyaudio
+        else:
+            import pyaudiowpatch as pyaudio
 
         _pa_module = pyaudio
     return _pa_module
