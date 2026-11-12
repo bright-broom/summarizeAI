@@ -9,6 +9,8 @@ Speech Summarizer AI は、「録音 + リアルタイム文字起こし + AI �
 
 - **Windows:** Microsoft の Foundry Local をオンデバイス AI 推論基盤として採用しています。起動時に PC のハードウェア構成を検出し、利用可能なアクセラレータ（NPU、GPU、CPU）から最適な実行プロバイダーを自動的に選択します。
 - **macOS:** Apple の MLX で、Apple Silicon の GPU（Metal）を使って要約 LLM を実行します。
+- **文字起こし:** 日本語専用に学習された [kotoba-whisper v2.0](https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0) を既定で使います（[精度](#文字起こしの精度)）。
+- **自動アップデート:** 新しいバージョンが出るとアプリが知らせ、ワンクリックで更新できます（Mac）。
 
 さらに、HP 製 PC の Programmable Key にも対応しています。
 どのアプリを前面に開いていても、キーを 1 回押すだけで録音開始（リアルタイム文字起こしも同時に開始）、もう一度押せば録音停止と同時に AI 要約が自動的に始まります。Teams や Zoom、ブラウザの会議画面を最前面に保ったまま、物理キーひとつで「録る → 書き起こす → まとめる」が完結します（Mac ではキーボードショートカットで同じことができます。[後述](#録音をキーボードショートカットで操作する)）。
@@ -21,10 +23,11 @@ Apple Silicon（M1 以降）の Mac 向けです。Intel Mac は [Intel Mac の�
 
 ### 1. DMG をダウンロード
 
-**[最新版をダウンロード（Releases）](https://github.com/bright-broom/summarizeAI/releases/latest)** から `SpeechSummarizerAI-<バージョン>-arm64.dmg` を取得します。
+**[最新版をダウンロード](https://github.com/bright-broom/summarizeAI-releases/releases/latest)**（配布用の公開ページ。ログイン不要）から `SpeechSummarizerAI-<バージョン>-arm64.dmg` を取得します。
 
-- リポジトリは非公開のため、閲覧権限のある GitHub アカウントでのログインが必要です。
-- 過去の版は [Releases 一覧](https://github.com/bright-broom/summarizeAI/releases) にあります。
+- 公開ページに目的の版が無い場合は、[このリポジトリの Releases](https://github.com/bright-broom/summarizeAI/releases/latest) から取得できます（非公開のため閲覧権限のある GitHub アカウントでのログインが必要）。
+- 過去の版は [Releases 一覧](https://github.com/bright-broom/summarizeAI-releases/releases) にあります。
+- 一度インストールすれば、以降の版は[アプリ内で自動更新](#アップデート)されます（v0.1.2 以降）。
 - リリース前の開発版を試す場合は、「Actions」タブ →「Build macOS DMG」→ 成功した実行 → ページ下部の **Artifacts** から取得できます（保存期間 90 日）。
 
 ### 2. インストールと初回起動
@@ -34,13 +37,19 @@ Apple Silicon（M1 以降）の Mac 向けです。Intel Mac は [Intel Mac の�
    初回に「開けません」「マルウェアが含まれていないことを検証できません」と出た場合は、下の「初回起動がブロックされたとき」を参照してください。
 3. マイクへのアクセスを求められたら **「許可」** します。
    拒否してしまった場合は「システム設定 → プライバシーとセキュリティ → マイク」で「Speech Summarizer AI」を ON にしてください。
-4. 初回起動時に AI モデルを自動でダウンロードします（音声認識 Whisper と要約用 `mlx-community/Qwen2.5-7B-Instruct-4bit`、合計約 5GB）。2 回目以降はすぐ起動します。
+4. 初回起動時に AI モデルを自動でダウンロードします（合計約 6.5GB。2 回目以降はすぐ起動します）。
+   - 文字起こし: 日本語・高精度（kotoba-whisper v2.0、約 1.5GB）・標準（small）・高速（base）
+   - 要約: `mlx-community/Qwen2.5-7B-Instruct-4bit`（約 4.3GB）
 
 ### アップデート
 
-新しいバージョンが公開されると、アプリの起動時（とその後 6 時間ごと）に「新しいバージョンがあります」と表示されます。
-「今すぐ更新」を押すと自動でダウンロードしてアプリを入れ替え、再起動します（録音・要約の処理中は、終わってから更新します）。
-手動で確認する場合はメニューバーの「ヘルプ」→「アップデートを確認…」。
+v0.1.2 以降は、新しいバージョンが公開されるとアプリの起動時（とその後 6 時間ごと）に「新しいバージョンがあります」と表示されます。
+
+- **今すぐ更新:** ダウンロード → アプリの入れ替え → 再起動まで自動で行います。録音・要約の処理中は、終わってから更新します。
+- **後で / この版をスキップ:** 次回の確認まで、またはその版については表示しません。
+- 手動で確認する場合はメニューバーの「ヘルプ」→「アップデートを確認…」。
+- ダウンロードしたファイルは GitHub が公開しているサイズと SHA-256 で照合し、一致しない場合は入れ替えません。入れ替えに失敗した場合は元の版に戻します。
+- v0.1.1 以前にはこの機能が無いため、v0.1.2 だけは DMG から手動で入れてください。
 ※ 更新後、macOS がマイクへのアクセスをもう一度確認することがあります（Apple の公証を受けていないため）。その場合は「許可」してください。
 
 ### 初回起動がブロックされたとき
@@ -59,6 +68,25 @@ macOS 15 以降では、以前の「右クリック →開く」では許可で�
 ゴミ箱に入ってしまった場合は、ゴミ箱から「Applications」へ戻すか、DMG からもう一度ドラッグしてください。
 
 この操作を不要にするには、Apple Developer Program（年 99 USD）の「Developer ID」で署名・公証する必要があります。手順は「[署名と公証](#署名と公証警告を出さずに配布する)」を参照。
+
+### 文字起こしの精度
+
+一覧画面右上の「文字起こし精度」で選べます。macOS の日本語読み上げ（Kyoko）に背景雑音を混ぜた会議風の音声（約 1 分）を、アプリと同じ経路で文字起こしした結果です（GitHub の Mac・5 コアで計測、`scripts/stt_benchmark.py`）。
+
+| 選択肢 | モデル | 文字誤り率（v0.1.1 → v0.1.2） | 処理時間 / 音声の長さ |
+| --- | --- | --- | --- |
+| 日本語・高精度（推奨・既定） | kotoba-whisper v2.0 | 5.7% → **2.0%** | 約 0.9 倍 |
+| 標準 | Whisper small | 9.4% → **3.3%** | 約 0.3 倍 |
+| 高速 | Whisper base | 16.4% → **9.0%** | 約 0.1 倍 |
+
+v0.1.2 では、モデルの変更に加えて次の改善をしています。
+
+- 発話の区切り方: 0.6 秒の間で区切り、短い発話はまとめ、息継ぎを残す（文の途中で切れにくい）
+- 48kHz → 16kHz 変換時の雑音の折り返しを除去、小さい音量の自動補正
+- 無音から生まれる定型の誤認識（「ご視聴ありがとうございました」等）を除去
+- 「標準」では直前の発言を表記のヒントとして利用
+
+「日本語・高精度」は処理が重めです。古い Mac で録音中の表示が遅れる場合は「標準」に切り替えてください（停止後に残りを処理するので文字は欠けません）。
 
 ### 3. （任意）オンライン会議・動画の音声も録音する
 
@@ -156,16 +184,8 @@ xcode-select --install
 
 `.github/workflows/build-macos-dmg.yml` が、GitHub の Mac（Apple Silicon）上で `.app` と DMG を作成します。
 
-- **手動実行:** 「Actions」タブ →「Build macOS DMG」→「Run workflow」
-- **リリース:** `v0.1.0` のように `v` で始まるタグを push すると、Releases に DMG が自動で添付されます
-
-```bash
-git tag v0.1.0
-```
-
-```bash
-git push origin v0.1.0
-```
+- **手動実行:** 「Actions」タブ →「Build macOS DMG」→「Run workflow」。`release_tag` に既存のタグ（例 `v0.1.2`）を入れると、その版の DMG を作り直して Releases に載せ直します（公開リポジトリへの配信のやり直しにも使えます）
+- **リリース:** 下の「[新しいバージョンを配信する手順](#新しいバージョンを配信する手順)」を参照
 
 ビルド後に、作成した `.app` に同梱ライブラリ（MLX・sounddevice・faster-whisper・PySide6 など）が読み込めるかを確認するセルフテスト（`SSAI_SELFTEST=1`）を実行します。失敗した場合はジョブが失敗し、DMG はアップロード・リリースされません。
 
@@ -197,19 +217,41 @@ Apple Developer Program に加入していれば、GitHub Actions で Developer 
 2. [Fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) を作成する
    - Repository access: **Only select repositories** → `summarizeAI-releases` だけ
    - Permissions: **Contents → Read and write**
-3. このリポジトリの Settings → Secrets and variables → Actions に `RELEASES_REPO_TOKEN` として登録する
+3. **このリポジトリ（summarizeAI）** の Settings → Secrets and variables → **Actions** →「**Secrets**」タブ →「**New repository secret**」で、名前 `RELEASES_REPO_TOKEN` として登録する
+
+登録を間違えやすい点（ビルドから見えないと公開リポジトリへの配信が「skipped」になります）:
+
+- 「Variables」タブではなく「**Secrets**」タブに登録する
+- 「Environment secrets」ではなく「**Repository secrets**」に登録する
+- 「Codespaces」「Dependabot」ではなく「**Actions**」に登録する
+- 登録先は配布用の `summarizeAI-releases` ではなく、ビルドが動く **`summarizeAI`**
+
+既に出した版を公開リポジトリへ配信し直すには、「Actions」→「Build macOS DMG」→「Run workflow」で `Use workflow from` にそのタグ（例 `v0.1.2`）を選び、`release_tag` に同じタグを入れて実行します。
 
 ### 新しいバージョンを配信する手順
 
-1. `pyproject.toml` の `version`（と `src/speech_summarizer_ai/__init__.py` の予備の版数）を上げて `main` に反映する
-2. 同じ版数のタグを push する（例: 版数が `0.1.2` なら `v0.1.2`）
+1. 次の 3 か所の版数を上げて `main` に反映する
+   - `pyproject.toml` の `version`
+   - `src/speech_summarizer_ai/__init__.py` の予備の版数
+   - `speech_summarizer_ai_mac.spec` の `APP_VERSION`
+2. 同じ版数のタグを push する（例: 版数が `0.1.3` なら `v0.1.3`）
 
 ```bash
-git tag v0.1.2 && git push origin v0.1.2
+git pull && git tag v0.1.3 && git push origin v0.1.3
 ```
 
 ビルド・自己テスト後、このリポジトリと `summarizeAI-releases` の両方の Releases に DMG が載り、利用中のアプリに更新の案内が出ます。
 タグと `pyproject.toml` の版数が一致しない場合はビルドが失敗します（誤った版数の配信を防ぐため）。
+
+### 文字起こし精度のベンチマーク
+
+`.github/workflows/stt-benchmark.yml` が、GitHub の Mac で日本語の読み上げ音声を各モデルで文字起こしし、文字誤り率と処理時間を表にします。
+
+- 文字起こし関連のファイル（`src/speech_summarizer_ai/stt/`・`settings/stt.py`・`scripts/stt_benchmark.py`）を変更した PR では自動で実行されます
+- 手動実行: 「Actions」→「STT benchmark」→「Run workflow」
+- 結果は実行結果ページの Summary に出ます。改善を 1 つずつ有効にした場合の比較と、実際に配布する設定（「採用設定」）の行があります
+
+変更の効果は、この表で「採用設定」の文字誤り率が下がることを確認してから取り込んでください。
 
 ### .app を作らずに開発用に起動する
 
@@ -234,6 +276,7 @@ Windows 専用の部品を次のように置き換えています。
 | 要約 LLM | Foundry Local (WinML) | MLX（Apple Silicon）/ Ollama 等の OpenAI 互換サーバー（Intel）。`llm/mac_backend.py` |
 | データ保存先 | `%LOCALAPPDATA%\WEEL\SpeechSummarizerAI` | `~/Library/Application Support/WEEL/SpeechSummarizerAI` |
 | 実行ファイル | `speech_summarizer_ai.spec`（EXE） | `speech_summarizer_ai_mac.spec`（.app / DMG） |
+| 自動アップデート | なし | `updater.py` / `ui/update_prompt.py`（公開リポジトリの Releases から取得） |
 
 ### 環境変数（任意）
 
@@ -310,12 +353,15 @@ pyinstaller --noconfirm --clean speech_summarizer_ai.spec
 
 - `src/speech_summarizer_ai/` — アプリ本体（`settings` / `platform_utils` / `domain` / `data` / `audio` / `stt` / `llm` / `controllers` / `ui`）。
 - `resources/icons/` — アイコン（`app.svg`、Windows 用 `app.ico`、macOS 用 `app.icns`）。PyInstaller で EXE / .app に同梱される。
-- `scripts/` — 開発用起動 `run_dev.py`、macOS 用 `setup_mac.sh` / `run_mac.command` / `build_mac_app.sh`。
-- `packaging/` — PyInstaller 用 `hook-webrtcvad` など。
-- `.github/workflows/build-macos-dmg.yml` — macOS 用 DMG を GitHub Actions でビルド。
+- `src/speech_summarizer_ai/stt/` — 文字起こし（`realtime.py` が発話の区切りと認識、`faster_whisper_engine.py` がモデル呼び出し、`model_downloader.py` がモデル取得）。
+- `src/speech_summarizer_ai/updater.py` と `ui/update_prompt.py` — 自動アップデート。
+- `scripts/` — 開発用起動 `run_dev.py`、macOS 用 `setup_mac.sh` / `run_mac.command` / `build_mac_app.sh`、文字起こしベンチマーク `stt_benchmark.py`。
+- `packaging/` — PyInstaller 用 `hook-webrtcvad`、macOS の署名用 `macos/entitlements.plist`。
+- `.github/workflows/build-macos-dmg.yml` — macOS 用 DMG のビルド・リリース・公開リポジトリへの配信。
+- `.github/workflows/stt-benchmark.yml` — 文字起こし精度のベンチマーク。
 - `pyproject.toml` — パッケージ定義。`requirements.txt`（Windows）/ `requirements-mac.txt`（macOS）— 依存関係。
 - `speech_summarizer_ai.spec` — Windows 向け PyInstaller 定義。`speech_summarizer_ai_mac.spec` — macOS 向け（.app）。
-- `tests/` — テスト（`test_macos_compat.py` は macOS 用の録音・要約レイヤを Windows / Linux 上でも検証できる）。
+- `tests/` — テスト（`pytest`）。macOS 用の録音・要約レイヤ、文字起こしの前処理と区切り方、自動アップデートは Windows / Linux 上でも検証できる。
 - 実行時データ（SQLite・録音・ローカルモデル）は `platform_utils.paths.project_root()` を基準に `database/`・`sessions/`・`models/` を置く。
   - **Windows:** WinRT の `ApplicationData` が使える環境（MSIX 等）ではそのローカルフォルダ。**未パッケージの EXE** などでは `%LOCALAPPDATA%\WEEL\SpeechSummarizerAI\`。
   - **macOS:** `~/Library/Application Support/WEEL/SpeechSummarizerAI/`（`SSAI_DATA_DIR` で変更可）。
