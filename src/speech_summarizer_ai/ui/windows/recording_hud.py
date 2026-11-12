@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QSettings, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QMouseEvent, QPainter, QPen
+from collections.abc import Callable
+
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -23,6 +25,54 @@ from speech_summarizer_ai.ui.theme import (
     recording_hud_time_label_qss,
 )
 from speech_summarizer_ai.ui.widgets.record_control_button import RecordControlButton
+
+
+# 入力が無いとみなすレベル（0〜1）と、警告を出すまでの無音継続時間
+_SILENCE_LEVEL = 0.012
+_SILENCE_WARN_MS = 8000
+
+
+class _LevelMeter(QWidget):
+    """マイク入力レベルを 5 本のバーで表示する小さなメーター。
+
+    「ちゃんと声を拾えているか」を録音中に一目で確認できるようにする。
+    """
+
+    _BARS = 5
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(22, 16)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._level = 0.0
+        self._on = QColor("#34c759")
+        self._off = QColor(128, 128, 128, 70)
+
+    def set_dark(self, dark: bool) -> None:
+        self._off = QColor(255, 255, 255, 50) if dark else QColor(0, 0, 0, 40)
+        self.update()
+
+    def set_level(self, level: float) -> None:
+        # 人の声は小さめの値に偏るため平方根で持ち上げて見やすくする
+        v = max(0.0, min(1.0, level)) ** 0.5
+        if abs(v - self._level) > 0.01:
+            self._level = v
+            self.update()
+
+    def paintEvent(self, _event) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w, h = self.width(), self.height()
+        gap = 2
+        bw = (w - gap * (self._BARS - 1)) / self._BARS
+        lit = round(self._level * self._BARS + 0.2) if self._level > 0.03 else 0
+        for i in range(self._BARS):
+            bh = h * (0.35 + 0.65 * (i + 1) / self._BARS)
+            x = i * (bw + gap)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(self._on if i < lit else self._off)
+            p.drawRoundedRect(x, h - bh, bw, bh, 1.0, 1.0)
+        p.end()
 
 
 class RecordingHudWindow(QWidget):
@@ -96,6 +146,19 @@ class RecordingHudWindow(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
 
+        self._level_meter = _LevelMeter(self)
+        self._level_meter.setToolTip("マイク入力レベル")
+        self._level_meter.setVisible(False)
+        self._level_provider: Callable[[], float] | None = None
+        self._silent_since = QElapsedTimer()
+
+        # 状態テキスト（「音声なし」「要約中…」など）。通常時は非表示でコンパクトさを保つ。
+        self._status_label = QLabel("")
+        self._status_label.setVisible(False)
+        self._status_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, False
+        )
+
         self._close_btn = QPushButton()
         self._close_btn.setText("")
         self._close_btn.setIconSize(QSize(16, 16))
@@ -114,6 +177,8 @@ class RecordingHudWindow(QWidget):
         row.setSpacing(6)
         row.addWidget(self._rec_led, alignment=Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self._time_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self._level_meter, alignment=Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self._status_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         row.addSpacing(10)
         row.addWidget(self._record_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self._close_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -167,6 +232,7 @@ class RecordingHudWindow(QWidget):
             )
         )
         self._record_btn.set_hud_dark(self._ui_dark)
+        self._level_meter.set_dark(self._ui_dark)
         if not self._recording_ui_active:
             self._set_rec_led_idle()
         self.update()
@@ -182,6 +248,13 @@ class RecordingHudWindow(QWidget):
             None: ``RecordControlButton`` の ``setEnabled`` とカーソルを更新する。
         """
         self._record_btn.setEnabled(interactive)
+        if not self._recording_ui_active:
+            if interactive:
+                self._hide_status()
+                self._record_btn.setToolTip("録音を開始する")
+            else:
+                self._show_status("要約中…", warn=False)
+                self._record_btn.setToolTip("文字起こしと要約が終わると、次の録音を開始できます")
         self._record_btn.setCursor(
             Qt.CursorShape.ArrowCursor
             if not interactive
@@ -203,6 +276,11 @@ class RecordingHudWindow(QWidget):
             self._record_btn.set_recording(True)
             self._record_btn.setToolTip("録音を停止する")
             self._elapsed.start()
+            self._silent_since.start()
+            self._hide_status()
+            self._level_meter.set_level(0.0)
+            self._level_meter.setVisible(True)
+            self._resize_keep_right_edge()
             self._update_time_label()
             self._timer.start()
             self._rec_led_blink_on = True
@@ -212,6 +290,8 @@ class RecordingHudWindow(QWidget):
             self._record_btn.set_recording(False)
             self._record_btn.setToolTip("録音を開始する")
             self._timer.stop()
+            self._level_meter.setVisible(False)
+            self._hide_status()
             self._time_label.setText("00:00")
             self._blink_timer.stop()
             self._set_rec_led_idle()
@@ -402,6 +482,60 @@ class RecordingHudWindow(QWidget):
             None: ``_format_elapsed`` の結果を ``_time_label`` に設定する。
         """
         self._time_label.setText(self._format_elapsed(self._elapsed.elapsed()))
+        if self._level_provider is None or not self._recording_ui_active:
+            return
+        try:
+            level = float(self._level_provider())
+        except Exception:  # noqa: BLE001
+            return
+        self._level_meter.set_level(level)
+        if level > _SILENCE_LEVEL:
+            self._silent_since.restart()
+            if self._status_label.isVisible():
+                self._hide_status()
+        elif self._silent_since.elapsed() > _SILENCE_WARN_MS and not self._status_label.isVisible():
+            self._show_status("音声なし", warn=True)
+
+    def set_level_provider(self, provider: Callable[[], float] | None) -> None:
+        """録音中に入力レベル（0〜1）を返す関数を設定する（100ms ごとにポーリング）。
+
+        Args:
+            provider: レベルを返す呼び出し可能オブジェクト。``None`` で無効。
+
+        Returns:
+            None
+        """
+        self._level_provider = provider
+
+    def _show_status(self, text: str, *, warn: bool) -> None:
+        if warn:
+            color = "#ffb347" if self._ui_dark else "#b45f00"
+            self._status_label.setToolTip(
+                "マイクの音が届いていません。\n"
+                "・マイクが接続・選択されているか\n"
+                "・システム設定 → プライバシーとセキュリティ → マイク で許可されているか\n"
+                "を確認してください。"
+            )
+        else:
+            color = "#9a9aa4" if self._ui_dark else "#6b6f76"
+            self._status_label.setToolTip("文字起こしと AI 要約を作成しています")
+        self._status_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        self._status_label.setText(text)
+        self._status_label.setVisible(True)
+        self._resize_keep_right_edge()
+
+    def _hide_status(self) -> None:
+        self._status_label.setVisible(False)
+        self._resize_keep_right_edge()
+
+    def _resize_keep_right_edge(self) -> None:
+        """内容に合わせて幅を変えるとき、右端の位置を保つ（右下に置いた HUD が画面外へはみ出さない）。"""
+        right = self.geometry().right()
+        self.adjustSize()
+        if self.isVisible():
+            self.move(right - self.width() + 1, self.y())
 
     def _set_rec_led_idle(self) -> None:
         """録音 LED を待機（消灯相当）の QSS にする。

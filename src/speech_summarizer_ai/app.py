@@ -241,6 +241,11 @@ def main() -> int:
     from speech_summarizer_ai.ui.recording_overlay import RecordingOverlay
 
     recording_overlay = RecordingOverlay()
+    # macOS は Dock / Finder から開くことが多いため、開いただけでは録音を始めない。
+    # キーボードショートカット等から「起動＝録音開始」にしたい場合は ``--record`` を付けて起動する
+    # （例: open -n -a "Speech Summarizer AI" --args --record）。Windows は従来どおり自動開始。
+    if sys.platform == "darwin":
+        recording_overlay.auto_record_on_launch = "--record" in sys.argv[1:]
     _instance_relay.activate_requested.connect(
         recording_overlay.bring_to_foreground_from_second_instance
     )
