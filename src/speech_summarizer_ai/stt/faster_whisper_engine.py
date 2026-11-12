@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -21,8 +22,31 @@ from speech_summarizer_ai.platform_utils import paths
 DeviceLiteral = Literal["auto", "cpu", "cuda"]
 
 
+def _lowpass_fir(cutoff_ratio: float, taps: int = 63) -> np.ndarray:
+    """窓付き sinc（Blackman 窓）のローパス FIR 係数を返す。
+
+    Args:
+        cutoff_ratio: 遮断周波数 ÷ 入力サンプリングレート（0〜0.5）。
+        taps: タップ数（奇数）。
+
+    Returns:
+        np.ndarray: 合計 1 に正規化した係数。
+    """
+    n = np.arange(taps) - (taps - 1) / 2.0
+    h = 2.0 * cutoff_ratio * np.sinc(2.0 * cutoff_ratio * n)
+    h *= np.blackman(taps)
+    return (h / h.sum()).astype(np.float64)
+
+
+_FIR_CACHE: dict[tuple[int, int], np.ndarray] = {}
+
+
 def _resample_linear_float32(x: np.ndarray, *, src_sr: int, dst_sr: int) -> np.ndarray:
-    """1 次元 float32 波形を線形補間でリサンプルする（外部リサンプラに依存しない）。
+    """1 次元 float32 波形をリサンプルする（外部リサンプラに依存しない）。
+
+    ダウンサンプル時は先にアンチエイリアスのローパスを掛ける。掛けないと 48 kHz → 16 kHz で
+    8 kHz 超の成分（子音の摩擦音・環境ノイズ）が音声帯域に折り返し、認識精度が落ちる。
+    整数比（48k→16k の 3:1 など）は間引き、それ以外は線形補間。
 
     Args:
         x: 入力波形（1 次元）。``float32`` 以外は内部で扱いやすい型に寄せる。
@@ -36,10 +60,47 @@ def _resample_linear_float32(x: np.ndarray, *, src_sr: int, dst_sr: int) -> np.n
         return x.astype(np.float32, copy=False)
     if x.size == 0:
         return np.zeros(0, dtype=np.float32)
+    xf = x.astype(np.float64)
+    if dst_sr < src_sr:
+        key = (src_sr, dst_sr)
+        h = _FIR_CACHE.get(key)
+        if h is None:
+            # 出力ナイキストの 90% で遮断（16 kHz 出力なら約 7.2 kHz）
+            h = _lowpass_fir(0.45 * dst_sr / src_sr)
+            _FIR_CACHE[key] = h
+        xf = np.convolve(xf, h, mode="same")
+        if src_sr % dst_sr == 0:
+            return xf[:: src_sr // dst_sr].astype(np.float32)
     n_out = max(1, int(round(x.size * dst_sr / src_sr)))
     t_old = np.linspace(0.0, 1.0, num=x.size, endpoint=False)
     t_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-    return np.interp(t_new, t_old, x.astype(np.float64)).astype(np.float32)
+    return np.interp(t_new, t_old, xf).astype(np.float32)
+
+
+def _normalize_level(x: np.ndarray, *, target_peak: float = 0.8, max_gain: float = 6.0) -> np.ndarray:
+    """小さすぎる入力を聞き取りやすい音量まで持ち上げる（大きい入力はそのまま）。
+
+    Args:
+        x: float32 波形（-1〜1）。
+        target_peak: 目標ピーク。
+        max_gain: 最大倍率（無音に近いノイズを増幅しすぎないため）。
+
+    Returns:
+        np.ndarray: 調整後の波形。
+    """
+    if x.size == 0:
+        return x
+    peak = float(np.max(np.abs(x)))
+    if peak <= 1e-4 or peak >= target_peak:
+        return x
+    gain = min(max_gain, target_peak / peak)
+    return (x * gain).astype(np.float32)
+
+
+def default_cpu_threads() -> int:
+    """CPU 推論のスレッド数（CTranslate2 の既定 4 は最近の Mac / PC では少ない）。"""
+    n = os.cpu_count() or 4
+    return max(4, min(8, n))
 
 
 @dataclass(frozen=True)
@@ -142,7 +203,7 @@ class FastWhisperTranscriber:
             FileNotFoundError: ローカル利用を要求したが ``models/stt/...`` が未配置の場合。
         """
         self._device_index = device_index
-        self._cpu_threads = cpu_threads
+        self._cpu_threads = cpu_threads if cpu_threads > 0 else default_cpu_threads()
         self._num_workers = num_workers
 
         dev: DeviceLiteral = device if device is not None else config.STT_DEVICE
@@ -264,6 +325,7 @@ class FastWhisperTranscriber:
         beam_size: int = 3,
         vad_filter: bool = False,
         condition_on_previous_text: bool = False,
+        initial_prompt: str | None = None,
     ) -> TranscriptionResult:
         """モノラル int16 PCM を 16 kHz float32 に合わせて ``transcribe`` する（リアルタイム区間向け）。
 
@@ -274,6 +336,7 @@ class FastWhisperTranscriber:
             beam_size: ビーム幅（短い区間では小さめ推奨）。
             vad_filter: 区間内の無音除去（外側で VAD 済みなら ``False``）。
             condition_on_previous_text: 直前テキストへの依存（チャンク独立なら ``False``）。
+            initial_prompt: 直前の発話など、表記・用語のヒントとして渡す文字列。
 
         Returns:
             TranscriptionResult: 認識結果。
@@ -284,7 +347,9 @@ class FastWhisperTranscriber:
         if pcm_int16.ndim != 1:
             raise ValueError("pcm_int16 は 1 次元モノラルである必要があります")
         x = pcm_int16.astype(np.float32) / 32768.0
-        audio_16k = _resample_linear_float32(x, src_sr=sample_rate, dst_sr=16_000)
+        audio_16k = _normalize_level(
+            _resample_linear_float32(x, src_sr=sample_rate, dst_sr=16_000)
+        )
         model = self._ensure_model()
         segments_iter, info = model.transcribe(
             audio_16k,
@@ -293,6 +358,7 @@ class FastWhisperTranscriber:
             vad_filter=vad_filter,
             task="transcribe",
             condition_on_previous_text=condition_on_previous_text,
+            initial_prompt=initial_prompt or None,
         )
         parts: list[TranscriptionSegment] = []
         text_chunks: list[str] = []

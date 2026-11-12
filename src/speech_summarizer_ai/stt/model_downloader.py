@@ -34,6 +34,8 @@ _STT_HF_REPO_IDS: dict[str, str] = {
     "small": "Systran/faster-whisper-small",
     "medium": "Systran/faster-whisper-medium",
     "large": "Systran/faster-whisper-large-v3",
+    # 日本語特化（kotoba-whisper v2.0 の CTranslate2 版。Apache-2.0）
+    "kotoba": "kotoba-tech/kotoba-whisper-v2.0-faster",
 }
 
 _missing_hf = [f for f, _ in config.STT_MODEL_OPTIONS if f not in _STT_HF_REPO_IDS]
