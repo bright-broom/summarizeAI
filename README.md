@@ -21,10 +21,11 @@ Apple Silicon（M1 以降）の Mac 向けです。Intel Mac は [Intel Mac の�
 
 ### 1. DMG をダウンロード
 
-次のどちらかから `SpeechSummarizerAI-<バージョン>-arm64.dmg` を取得します（GitHub へのログインが必要）。
+**[最新版をダウンロード（Releases）](https://github.com/bright-broom/summarizeAI/releases/latest)** から `SpeechSummarizerAI-<バージョン>-arm64.dmg` を取得します。
 
-- **Releases**（タグを付けて公開した版）: リポジトリの「Releases」ページ
-- **最新のビルド**: 「Actions」タブ →「Build macOS DMG」→ 一番上の成功した実行 → ページ下部の **Artifacts** にある `SpeechSummarizerAI-macOS-dmg`（zip を解凍すると DMG が出てきます。保存期間は 90 日）
+- リポジトリは非公開のため、閲覧権限のある GitHub アカウントでのログインが必要です。
+- 過去の版は [Releases 一覧](https://github.com/bright-broom/summarizeAI/releases) にあります。
+- リリース前の開発版を試す場合は、「Actions」タブ →「Build macOS DMG」→ 成功した実行 → ページ下部の **Artifacts** から取得できます（保存期間 90 日）。
 
 ### 2. インストールと初回起動
 
