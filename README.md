@@ -31,12 +31,27 @@ Apple Silicon（M1 以降）の Mac 向けです。Intel Mac は [Intel Mac の�
 
 1. DMG を開き、「Speech Summarizer AI」を「Applications」フォルダへドラッグします。
 2. アプリケーションフォルダ（または Launchpad）から「Speech Summarizer AI」をダブルクリックします。
-   - 「開発元を確認できないため開けません」と出た場合は、アイコンを **右クリック →「開く」→「開く」**。
-     macOS 15 以降は「システム設定 → プライバシーとセキュリティ」下部の **「このまま開く」** を押します。
-     （Apple の公証を受けていないためで、初回のみ必要です）
+   初回に「開けません」「マルウェアが含まれていないことを検証できません」と出た場合は、下の「初回起動がブロックされたとき」を参照してください。
 3. マイクへのアクセスを求められたら **「許可」** します。
    拒否してしまった場合は「システム設定 → プライバシーとセキュリティ → マイク」で「Speech Summarizer AI」を ON にしてください。
 4. 初回起動時に AI モデルを自動でダウンロードします（音声認識 Whisper と要約用 `mlx-community/Qwen2.5-7B-Instruct-4bit`、合計約 5GB）。2 回目以降はすぐ起動します。
+
+### 初回起動がブロックされたとき
+
+現在配布している DMG は Apple の公証（notarization）を受けていないため、ダウンロードしたアプリを初めて開くと macOS がブロックします。アプリが悪いのではなく「Apple が確認していない」という意味です。
+**ダイアログでは「ゴミ箱に入れる」ではなく「完了」を押してから**、次のどちらかで許可してください（最初の 1 回だけ）。
+
+- **方法A（設定画面）:** 「システム設定」→「プライバシーとセキュリティ」→ 下の方にある「"Speech Summarizer AI" は…ブロックされました」の **「このまま開く」** → もう一度アプリを開いて「このまま開く」→ パスワード入力
+- **方法B（ターミナルで 1 行）:**
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Speech Summarizer AI.app"
+```
+
+macOS 15 以降では、以前の「右クリック →開く」では許可できなくなっています。
+ゴミ箱に入ってしまった場合は、ゴミ箱から「Applications」へ戻すか、DMG からもう一度ドラッグしてください。
+
+この操作を不要にするには、Apple Developer Program（年 99 USD）の「Developer ID」で署名・公証する必要があります。手順は「[署名と公証](#署名と公証警告を出さずに配布する)」を参照。
 
 ### 3. （任意）オンライン会議・動画の音声も録音する
 
@@ -143,6 +158,26 @@ git push origin v0.1.0
 ```
 
 ビルド後に、作成した `.app` に同梱ライブラリ（MLX・sounddevice・faster-whisper・PySide6 など）が読み込めるかを確認するセルフテスト（`SSAI_SELFTEST=1`）を実行します。失敗した場合はジョブが失敗し、DMG はアップロード・リリースされません。
+
+### 署名と公証（警告を出さずに配布する）
+
+Apple Developer Program に加入していれば、GitHub Actions で Developer ID 署名と Apple の公証を自動で行い、ダウンロードした人の Mac で警告が出ない DMG を作れます。
+
+1. Apple Developer で **Developer ID Application** 証明書を作成し、キーチェーンアクセスから `.p12` で書き出す
+2. [appleid.apple.com](https://appleid.apple.com) で **App 用パスワード** を発行する
+3. GitHub のリポジトリ → Settings → Secrets and variables → Actions に次を登録する
+
+| Secret | 内容 |
+| --- | --- |
+| `MACOS_CERT_P12_BASE64` | `base64 -i cert.p12 \| pbcopy` でコピーした値 |
+| `MACOS_CERT_PASSWORD` | `.p12` 書き出し時のパスワード |
+| `MACOS_SIGN_IDENTITY` | `Developer ID Application: 氏名 (TEAMID)` |
+| `APPLE_ID` | Apple ID のメールアドレス |
+| `APPLE_TEAM_ID` | 10 桁のチーム ID |
+| `APPLE_APP_PASSWORD` | 手順 2 の App 用パスワード |
+
+登録後にタグを push するか「Run workflow」を実行すると、署名・公証済みの DMG が作られます（未登録の場合は従来どおりのアドホック署名）。
+自分の Mac でビルドする場合は、同じ名前の環境変数を設定して `./scripts/build_mac_app.sh` を実行します。
 
 ### .app を作らずに開発用に起動する
 

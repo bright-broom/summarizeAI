@@ -4,6 +4,11 @@
 #   ./scripts/build_mac_app.sh              # .app + .dmg を作り、/Applications にもコピー
 #   ./scripts/build_mac_app.sh --no-install # /Applications へはコピーしない（CI 等）
 #   ./scripts/build_mac_app.sh --no-dmg     # .dmg を作らない
+#
+# 署名と公証（任意。設定するとダウンロードした人の Mac で警告が出なくなる）:
+#   MACOS_SIGN_IDENTITY  "Developer ID Application: 氏名 (TEAMID)"（キーチェーンにある証明書名）
+#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD  公証用（App 用パスワードは appleid.apple.com で発行）
+# 未設定ならアドホック署名（自分の Mac で使う分には問題なし。配布先では初回に許可操作が必要）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -49,10 +54,31 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-# 3) 署名（ローカル用のアドホック署名。Apple Silicon では署名が無いと起動できない）
-echo "==> アドホック署名"
-codesign --force --deep --sign - "$APP"
-xattr -cr "$APP" || true
+# 3) 署名
+SIGN_ID="${MACOS_SIGN_IDENTITY:-}"
+ENTITLEMENTS="packaging/macos/entitlements.plist"
+if [[ -n "$SIGN_ID" ]]; then
+  echo "==> Developer ID で署名（Hardened Runtime）: ${SIGN_ID}"
+  xattr -cr "$APP" || true
+  sign_one() {
+    codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" \
+      --sign "$SIGN_ID" "$1"
+  }
+  # 内側から順に署名する（dylib / so / 実行ファイル → .framework → .app）
+  while IFS= read -r -d '' f; do
+    if file -b "$f" | grep -q "Mach-O"; then sign_one "$f"; fi
+  done < <(find "$APP/Contents" -type f -print0)
+  while IFS= read -r -d '' fw; do
+    sign_one "$fw"
+  done < <(find "$APP/Contents" -type d -name "*.framework" -print0 | sort -rz)
+  sign_one "$APP"
+  codesign --verify --deep --strict --verbose=2 "$APP"
+else
+  # アドホック署名（Apple Silicon では署名が無いと起動できない）
+  echo "==> アドホック署名（MACOS_SIGN_IDENTITY 未設定）"
+  codesign --force --deep --sign - "$APP"
+  xattr -cr "$APP" || true
+fi
 
 # 4) 配布用 DMG（ドラッグ＆ドロップで「アプリケーション」へ入れる形式）
 DMG=""
@@ -67,9 +93,19 @@ Speech Summarizer AI のインストール
 
 1. 「Speech Summarizer AI」を右の「Applications」フォルダへドラッグします。
 2. アプリケーションフォルダから「Speech Summarizer AI」を開きます。
-   ※ 初回だけ「開けません」と出た場合は、アイコンを右クリック →「開く」→「開く」。
-     （macOS 15 以降は「システム設定 → プライバシーとセキュリティ」下部の「このまま開く」）
 3. マイクへのアクセスを求められたら「許可」してください。
+
+■「開けません」「マルウェアが含まれていないことを検証できません」と出た場合
+  このアプリは Apple の公証を受けていないため、初回だけ許可が必要です。
+  ※ ダイアログでは「ゴミ箱に入れる」ではなく「完了」を押してください。
+
+  方法A（設定画面から）
+    「システム設定」→「プライバシーとセキュリティ」→ 下の方にある
+    「"Speech Summarizer AI" は…ブロックされました」の「このまま開く」を押し、
+    もう一度アプリを開いて「このまま開く」→ パスワード入力。
+
+  方法B（ターミナルで 1 行）
+    xattr -dr com.apple.quarantine "/Applications/Speech Summarizer AI.app"
 
 初回起動時に音声認識・要約用の AI モデル（約 5GB）をダウンロードします。
 音声・文字起こし・要約はこの Mac の中だけで処理されます。
@@ -78,7 +114,21 @@ TXT
   rm -f "$DMG"
   hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -fs HFS+ -format UDZO "$DMG" >/dev/null
   rm -rf "$STAGE"
-  codesign --force --sign - "$DMG" || true
+  # DMG はアドホック署名しない（アドホック署名の DMG はダウンロード後に開く時点で
+  # 「マルウェアの可能性」としてブロックされる）。Developer ID がある場合のみ署名・公証する。
+  if [[ -n "$SIGN_ID" ]]; then
+    echo "==> DMG に署名"
+    codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
+    if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_PASSWORD:-}" ]]; then
+      echo "==> Apple に公証を依頼（数分かかります）"
+      xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+        --password "$APPLE_APP_PASSWORD" --wait
+      xcrun stapler staple "$DMG"
+      spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+    else
+      echo "（APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD が未設定のため公証はスキップ）"
+    fi
+  fi
 fi
 
 # 5) インストール
