@@ -43,6 +43,11 @@ from speech_summarizer_ai.settings.paths import (
     WINDOWS_APPDATA_APP_DIR,
     WINDOWS_APPDATA_VENDOR_DIR,
 )
+from speech_summarizer_ai.settings.update import (
+    UPDATE_CHECK_INTERVAL_HOURS,
+    UPDATE_FIRST_CHECK_DELAY_SECONDS,
+    UPDATE_RELEASES_REPO,
+)
 from speech_summarizer_ai.settings.stt import (
     REALTIME_ENERGY_RMS_THRESHOLD,
     REALTIME_MAX_UTTERANCE_SECONDS,
@@ -107,5 +112,8 @@ __all__ = [
     "WINDOWS_APPDATA_VENDOR_DIR",
     "STT_MODEL_OPTIONS",
     "SttDevice",
+    "UPDATE_CHECK_INTERVAL_HOURS",
+    "UPDATE_FIRST_CHECK_DELAY_SECONDS",
+    "UPDATE_RELEASES_REPO",
     "output_channel_count",
 ]
