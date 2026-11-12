@@ -180,7 +180,8 @@ def _run_bundle_selftest() -> int:
     """
     import importlib  # noqa: PLC0415
 
-    mods = ["numpy", "PySide6.QtWidgets", "webrtcvad", "ctranslate2", "faster_whisper"]
+    mods = ["numpy", "PySide6.QtWidgets", "webrtcvad", "ctranslate2", "faster_whisper",
+            "httpx", "speech_summarizer_ai.updater", "speech_summarizer_ai.ui.update_prompt"]
     if sys.platform == "darwin":
         mods += ["sounddevice", "mlx.core", "mlx_lm", "mlx_lm.models.qwen2", "transformers"]
     failed = 0
@@ -191,6 +192,14 @@ def _run_bundle_selftest() -> int:
         except Exception as e:  # noqa: BLE001
             failed += 1
             print(f"[selftest] FAIL {m}: {type(e).__name__}: {e}", flush=True)
+    # 自動アップデートは版数の比較に依存する。.app に版数が入っていないと更新判定が狂う。
+    try:
+        from importlib.metadata import version as _dist_version  # noqa: PLC0415
+
+        print(f"[selftest] OK   version {_dist_version('speech-summarizer-ai')}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        failed += 1
+        print(f"[selftest] FAIL version metadata: {e}", flush=True)
     if sys.platform == "darwin" and not failed:
         try:
             import mlx.core as mx  # noqa: PLC0415
@@ -254,4 +263,8 @@ def main() -> int:
     )
     _install_macos_app_behaviour(app, recording_overlay)
     recording_overlay.show_at_startup()
+
+    from speech_summarizer_ai.ui.update_prompt import UpdateController  # noqa: PLC0415
+
+    UpdateController(recording_overlay).start()
     return app.exec()

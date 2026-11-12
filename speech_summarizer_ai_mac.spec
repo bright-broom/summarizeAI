@@ -81,6 +81,7 @@ except Exception as e:  # noqa: BLE001
 
 # importlib.metadata でバージョン確認されるパッケージのメタデータ。
 for _dist in (
+    "speech-summarizer-ai",  # アプリ自身のバージョン（自動アップデートの比較に使う）
     "transformers",
     "tokenizers",
     "huggingface-hub",

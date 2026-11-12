@@ -35,6 +35,7 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      RELEASES_REPO_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
       RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +69,14 @@ jobs:
       - name: Self-test bundled app
         env:
           SSAI_SELFTEST: "1"
-        run: '"dist/Speech Summarizer AI.app/Contents/MacOS/SpeechSummarizerAI"'
+        run: |
+          "dist/Speech Summarizer AI.app/Contents/MacOS/SpeechSummarizerAI" | tee "$RUNNER_TEMP/selftest.log"
+          # 自動アップデートは版数で判定するため、.app の版数が pyproject.toml と一致することを確認する
+          WANT="$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          GOT="$(sed -n 's/.*OK   version //p' "$RUNNER_TEMP/selftest.log")"
+          echo "pyproject=$WANT app=$GOT"
+          test "$WANT" = "$GOT"
+          if [ -n "$RELEASE_TAG" ]; then test "v$WANT" = "$RELEASE_TAG" || { echo "タグ $RELEASE_TAG と pyproject の版数 $WANT が一致しません"; exit 1; }; fi
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
@@ -77,27 +85,48 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+      - name: Write release notes
+        if: env.RELEASE_TAG != ''
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'MD'
+          ## インストール（Apple Silicon の Mac 専用）
+
+          1. 下の **Assets** から `SpeechSummarizerAI-*-arm64.dmg` をダウンロードして開きます。
+          2. 「Speech Summarizer AI」を「Applications」フォルダへドラッグします。
+          3. アプリケーションフォルダから開き、マイクへのアクセスを「許可」します。
+
+          インストール後は、新しいバージョンが出るとアプリが自動でお知らせし、ワンクリックで更新できます。
+
+          ### 「開けません」「マルウェアが含まれていないことを検証できません」と出たら
+
+          このアプリは Apple の公証を受けていないため、初回だけ許可が必要です。**ダイアログでは「ゴミ箱に入れる」ではなく「完了」を押してください。**
+
+          - **方法A:** 「システム設定」→「プライバシーとセキュリティ」→ 下の方の「このまま開く」→ もう一度アプリを開いて「このまま開く」
+          - **方法B（ターミナルで 1 行）:**
+            ```
+            xattr -dr com.apple.quarantine "/Applications/Speech Summarizer AI.app"
+            ```
+
+          初回起動時に AI モデルをダウンロードします。音声・文字起こし・要約はこの Mac の中だけで処理されます。
+          MD
+
       - name: Attach DMG to release
         if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: dist/*.dmg
-          body: |
-            ## インストール（Apple Silicon の Mac 専用）
+          body_path: ${{ runner.temp }}/notes.md
 
-            1. 下の **Assets** から `SpeechSummarizerAI-*-arm64.dmg` をダウンロードして開きます。
-            2. 「Speech Summarizer AI」を「Applications」フォルダへドラッグします。
-            3. アプリケーションフォルダから開き、マイクへのアクセスを「許可」します。
-
-            ### 「開けません」「マルウェアが含まれていないことを検証できません」と出たら
-
-            このアプリは Apple の公証を受けていないため、初回だけ許可が必要です。**ダイアログでは「ゴミ箱に入れる」ではなく「完了」を押してください。**
-
-            - **方法A:** 「システム設定」→「プライバシーとセキュリティ」→ 下の方の「このまま開く」→ もう一度アプリを開いて「このまま開く」
-            - **方法B（ターミナルで 1 行）:**
-              ```
-              xattr -dr com.apple.quarantine "/Applications/Speech Summarizer AI.app"
-              ```
-
-            初回起動時に AI モデル（約 5GB）をダウンロードします。音声・文字起こし・要約はこの Mac の中だけで処理されます。
+      # 自動アップデートの配信先（公開リポジトリ）にも載せる。
+      # Secret RELEASES_REPO_TOKEN（配布用リポジトリだけに Contents: Read and write を許可したトークン）が必要。
+      - name: Publish to public releases repository (auto-update)
+        if: env.RELEASE_TAG != '' && env.RELEASES_REPO_TOKEN != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: bright-broom/summarizeAI-releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Speech Summarizer AI ${{ env.RELEASE_TAG }}
+          files: dist/*.dmg
+          body_path: ${{ runner.temp }}/notes.md

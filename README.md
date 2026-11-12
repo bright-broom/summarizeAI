@@ -36,6 +36,13 @@ Apple Silicon（M1 以降）の Mac 向けです。Intel Mac は [Intel Mac の�
    拒否してしまった場合は「システム設定 → プライバシーとセキュリティ → マイク」で「Speech Summarizer AI」を ON にしてください。
 4. 初回起動時に AI モデルを自動でダウンロードします（音声認識 Whisper と要約用 `mlx-community/Qwen2.5-7B-Instruct-4bit`、合計約 5GB）。2 回目以降はすぐ起動します。
 
+### アップデート
+
+新しいバージョンが公開されると、アプリの起動時（とその後 6 時間ごと）に「新しいバージョンがあります」と表示されます。
+「今すぐ更新」を押すと自動でダウンロードしてアプリを入れ替え、再起動します（録音・要約の処理中は、終わってから更新します）。
+手動で確認する場合はメニューバーの「ヘルプ」→「アップデートを確認…」。
+※ 更新後、macOS がマイクへのアクセスをもう一度確認することがあります（Apple の公証を受けていないため）。その場合は「許可」してください。
+
 ### 初回起動がブロックされたとき
 
 現在配布している DMG は Apple の公証（notarization）を受けていないため、ダウンロードしたアプリを初めて開くと macOS がブロックします。アプリが悪いのではなく「Apple が確認していない」という意味です。
@@ -181,6 +188,28 @@ Apple Developer Program に加入していれば、GitHub Actions で Developer 
 
 登録後にタグを push するか「Run workflow」を実行すると、署名・公証済みの DMG が作られます（未登録の場合は従来どおりのアドホック署名）。
 自分の Mac でビルドする場合は、同じ名前の環境変数を設定して `./scripts/build_mac_app.sh` を実行します。
+
+### 自動アップデートの配信（初回のみの準備）
+
+ソースコードのリポジトリは非公開のまま、DMG だけを公開リポジトリ `bright-broom/summarizeAI-releases` に載せて配信します。
+
+1. GitHub で **公開（Public）** リポジトリ `summarizeAI-releases` を作成する（「Add a README file」にチェック）
+2. [Fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) を作成する
+   - Repository access: **Only select repositories** → `summarizeAI-releases` だけ
+   - Permissions: **Contents → Read and write**
+3. このリポジトリの Settings → Secrets and variables → Actions に `RELEASES_REPO_TOKEN` として登録する
+
+### 新しいバージョンを配信する手順
+
+1. `pyproject.toml` の `version`（と `src/speech_summarizer_ai/__init__.py` の予備の版数）を上げて `main` に反映する
+2. 同じ版数のタグを push する（例: 版数が `0.1.2` なら `v0.1.2`）
+
+```bash
+git tag v0.1.2 && git push origin v0.1.2
+```
+
+ビルド・自己テスト後、このリポジトリと `summarizeAI-releases` の両方の Releases に DMG が載り、利用中のアプリに更新の案内が出ます。
+タグと `pyproject.toml` の版数が一致しない場合はビルドが失敗します（誤った版数の配信を防ぐため）。
 
 ### .app を作らずに開発用に起動する
 
