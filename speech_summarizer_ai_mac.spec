@@ -23,7 +23,7 @@ BUNDLE_ID = "jp.weel.speechsummarizerai"
 try:
     from speech_summarizer_ai import __version__ as APP_VERSION
 except Exception:
-    APP_VERSION = "0.1.0"
+    APP_VERSION = "0.1.1"
 
 _root = Path(SPECPATH)
 _icon_path = _root / "resources" / "icons" / "app.icns"

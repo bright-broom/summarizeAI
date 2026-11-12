@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speech-summarizer-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "Speech Summarizer AI — Windows / macOS デスクトップ向けの録音・文字起こし・要約アプリ。"
 readme = "README.md"
 requires-python = ">=3.11"
