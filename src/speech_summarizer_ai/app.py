@@ -172,12 +172,49 @@ def _install_macos_app_behaviour(app: QApplication, overlay: object) -> None:
     app.aboutToQuit.connect(overlay._quit_application)  # type: ignore[attr-defined]
 
 
+def _run_bundle_selftest() -> int:
+    """``SSAI_SELFTEST=1`` のとき、同梱ライブラリが読み込めるかだけ確認して終了する（CI 用）。
+
+    Returns:
+        int: すべて import できれば 0、失敗があれば 1。
+    """
+    import importlib  # noqa: PLC0415
+
+    mods = ["numpy", "PySide6.QtWidgets", "webrtcvad", "ctranslate2", "faster_whisper"]
+    if sys.platform == "darwin":
+        mods += ["sounddevice", "mlx.core", "mlx_lm", "mlx_lm.models.qwen2", "transformers"]
+    failed = 0
+    for m in mods:
+        try:
+            importlib.import_module(m)
+            print(f"[selftest] OK   {m}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"[selftest] FAIL {m}: {type(e).__name__}: {e}", flush=True)
+    if sys.platform == "darwin" and not failed:
+        try:
+            import mlx.core as mx  # noqa: PLC0415
+
+            v = mx.array([1.0, 2.0]) * 2
+            mx.eval(v)
+            print(f"[selftest] OK   mlx compute {v.tolist()}", flush=True)
+            from transformers import AutoTokenizer  # noqa: F401, PLC0415
+
+            print("[selftest] OK   transformers.AutoTokenizer", flush=True)
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"[selftest] FAIL runtime: {type(e).__name__}: {e}", flush=True)
+    return 1 if failed else 0
+
+
 def main() -> int:
     """GUI アプリケーションを初期化し、メインループを実行する。
 
     Returns:
         int: ``QApplication.exec()`` の終了コード。
     """
+    if os.environ.get("SSAI_SELFTEST") == "1":
+        return _run_bundle_selftest()
     _redirect_output_when_bundled()
     _prepare_windows_pyside_dlls()
     _set_windows_app_user_model_id()

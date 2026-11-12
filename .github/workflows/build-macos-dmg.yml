@@ -27,6 +27,11 @@ jobs:
           PYTHON: python
         run: ./scripts/build_mac_app.sh --no-install
 
+      - name: Self-test bundled app
+        env:
+          SSAI_SELFTEST: "1"
+        run: '"dist/Speech Summarizer AI.app/Contents/MacOS/SpeechSummarizerAI"'
+
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
