@@ -23,6 +23,9 @@ from speech_summarizer_ai.stt.faster_whisper_engine import FastWhisperTranscribe
 
 _FRAME_SAMPLES_48K_10MS = 480
 
+# ベンチマークで改善前の区切り方（発話中の無音を捨てる）と比較するためのスイッチ。
+LEGACY_DROP_PAUSES = False
+
 # Whisper が無音・雑音から作りがちな定型の幻覚（YouTube 字幕由来）。
 # 強い目印: 会議ではまず出ない語。短い発話に含まれていれば幻覚とみなす。
 _HALLUCINATION_STRONG: tuple[str, ...] = (
@@ -312,7 +315,7 @@ def run_realtime_transcription_loop(
             return
         # 末尾の無音は 0.3 秒だけ残して削る
         trailing = silence_run * _FRAME_SAMPLES_48K_10MS
-        cut = max(0, trailing - keep_trailing_silence)
+        cut = 0 if LEGACY_DROP_PAUSES else max(0, trailing - keep_trailing_silence)
         buf = speech_buf[: speech_buf.size - cut] if cut else speech_buf
         start_s = utterance_first_sample
         speech_buf = np.zeros(0, dtype=np.int16)
@@ -341,7 +344,8 @@ def run_realtime_transcription_loop(
             silence_run = 0
         elif speech_buf.size > 0:
             # 発話中の短い間（息継ぎ）も波形に残す。消すと単語が詰まり誤認識しやすい。
-            speech_buf = np.concatenate([speech_buf, frame])
+            if not LEGACY_DROP_PAUSES:
+                speech_buf = np.concatenate([speech_buf, frame])
             silence_run += 1
             enough = speech_buf.size >= merge_min_samples
             if (enough and silence_run >= silence_need) or silence_run >= short_silence_need:

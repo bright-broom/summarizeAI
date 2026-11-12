@@ -25,13 +25,14 @@ from pathlib import Path
 
 import numpy as np
 
+# 正解は議事録として自然な表記（数字は算用数字）。読み上げは say が数字を自然に読む。
 SENTENCES = [
-    "本日は第四四半期の予算執行状況と、来期の採用計画について確認します。",
-    "マーケティング予算は現時点で八十五パーセントを消化しています。",
-    "来期はエンジニアを二名、一月から採用する方向で進めたいと考えています。",
-    "顧客A社の導入スケジュールは、十二月の第二週に後ろ倒しになりました。",
+    "本日は第4四半期の予算執行状況と、来期の採用計画について確認します。",
+    "マーケティング予算は現時点で85%を消化しています。",
+    "来期はエンジニアを2名、1月から採用する方向で進めたいと考えています。",
+    "顧客A社の導入スケジュールは、12月の第2週に後ろ倒しになりました。",
     "シングルサインオン連携の検証が残課題なので、来週火曜日までに対応します。",
-    "佐藤さんは採用要件を十一月二十日までにまとめて、共有してください。",
+    "佐藤さんは採用要件を11月20日までにまとめて、共有してください。",
     "田中さんからは予算の再配分案を、次回の定例会議で説明してもらいます。",
     "それでは、本日の会議はここまでとします。お疲れ様でした。",
 ]
@@ -81,6 +82,9 @@ def build_audio(voice: str) -> np.ndarray:
 
 
 def normalize(s: str) -> str:
+    import unicodedata
+
+    s = unicodedata.normalize("NFKC", s).replace("お疲れさま", "お疲れ様")
     drop = set("。、，．,.!！?？・…「」『』（）() 　\n")
     return "".join(ch for ch in s if ch not in drop)
 
@@ -96,8 +100,24 @@ def cer(ref: str, hyp: str) -> float:
     return prev[-1] / max(1, len(r))
 
 
-def apply_legacy(realtime_mod, engine_mod, config) -> None:
-    """改善前の処理に戻す（比較用）。"""
+FEATURES = ("resample", "normalize", "segment", "prompt", "beam", "filter")
+
+# 比較する組み合わせ（改善前 = 何も有効にしない）
+VARIANTS: dict[str, tuple[str, ...]] = {
+    "改善前": (),
+    "+リサンプル": ("resample",),
+    "+音量補正": ("normalize",),
+    "+区切り方": ("segment",),
+    "+文脈ヒント": ("prompt",),
+    "+ビーム5": ("beam",),
+    "+幻覚除去": ("filter",),
+    "すべて": FEATURES,
+    "文脈ヒント以外": tuple(f for f in FEATURES if f != "prompt"),
+}
+
+
+def apply_variant(realtime_mod, engine_mod, config, enabled: tuple[str, ...]) -> None:
+    """有効にしない改善を、改善前の処理に戻す（比較用）。"""
 
     def naive_resample(x, *, src_sr, dst_sr):
         n_out = max(1, int(round(x.size * dst_sr / src_sr)))
@@ -105,14 +125,21 @@ def apply_legacy(realtime_mod, engine_mod, config) -> None:
         t_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
         return np.interp(t_new, t_old, x.astype(np.float64)).astype(np.float32)
 
-    engine_mod._resample_linear_float32 = naive_resample
-    engine_mod._normalize_level = lambda x, **_: x
-    realtime_mod.is_probable_hallucination = lambda t: not t.strip()
-    config.REALTIME_SILENCE_FRAMES_10MS = 25
-    config.REALTIME_SHORT_UTTERANCE_SILENCE_FRAMES_10MS = 25
-    config.REALTIME_MERGE_MIN_SECONDS = 0.0
-    config.STT_BEAM_SIZE = 3
-    config.STT_CONTEXT_PROMPT_CHARS = 0
+    if "resample" not in enabled:
+        engine_mod._resample_linear_float32 = naive_resample
+    if "normalize" not in enabled:
+        engine_mod._normalize_level = lambda x, **_: x
+    if "filter" not in enabled:
+        realtime_mod.is_probable_hallucination = lambda t: not t.strip()
+    if "segment" not in enabled:
+        config.REALTIME_SILENCE_FRAMES_10MS = 25
+        config.REALTIME_SHORT_UTTERANCE_SILENCE_FRAMES_10MS = 25
+        config.REALTIME_MERGE_MIN_SECONDS = 0.0
+        realtime_mod.LEGACY_DROP_PAUSES = True
+    if "beam" not in enabled:
+        config.STT_BEAM_SIZE = 3
+    if "prompt" not in enabled:
+        config.STT_CONTEXT_PROMPT_CHARS = 0
 
 
 def run_once(project_root: Path, model: str, audio: np.ndarray) -> tuple[str, float]:
@@ -140,7 +167,7 @@ def run_once(project_root: Path, model: str, audio: np.ndarray) -> tuple[str, fl
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="+", default=["base", "small", "kotoba"])
-    ap.add_argument("--legacy", action="store_true", help="改善前の処理でも測る")
+    ap.add_argument("--legacy", action="store_true", help="改善前・改善ごとの効果も測る（要因分析）")
     ap.add_argument("--data-dir", default=os.environ.get("SSAI_DATA_DIR") or tempfile.mkdtemp())
     args = ap.parse_args()
 
@@ -156,41 +183,38 @@ def main() -> int:
     print(f"音声: {voice}, {seconds:.1f} 秒, CPU スレッド: {os.cpu_count()}", file=sys.stderr)
 
     rows: list[tuple[str, str, float, float, str]] = []
+    np.save(Path(args.data_dir) / "audio.npy", audio)
+    variants = VARIANTS if args.legacy else {"すべて": FEATURES}
     for model in args.models:
         print(f"== {model}: ダウンロード", file=sys.stderr)
         download_stt_model(root, model)
-        hyp, sec = run_once(root, model, audio)
-        rows.append((model, "改善後", cer(reference, hyp), sec / seconds, hyp))
-        print(f"   改善後 CER={rows[-1][2]:.1%} RTF={rows[-1][3]:.2f}", file=sys.stderr)
-
-    if args.legacy:
-        # 別プロセスで旧処理を測る（設定値をモジュールごと差し替えるため）
-        for model in args.models:
+        for label, enabled in variants.items():
+            # 設定値をモジュールごと差し替えるため、組み合わせごとに別プロセスで測る
             code = (
-                "import sys; sys.argv=['x']; import scripts.stt_benchmark as b;"
+                "import sys, json; import scripts.stt_benchmark as b;"
                 "from speech_summarizer_ai import settings as c;"
                 "from speech_summarizer_ai.stt import realtime as r, faster_whisper_engine as e;"
-                "b.apply_legacy(r,e,c);"
-                f"import numpy as np; a=np.load({str(Path(args.data_dir) / 'audio.npy')!r});"
-                f"from pathlib import Path; h,s=b.run_once(Path({str(root)!r}),{model!r},a);"
-                "import json; print(json.dumps([h,s]))"
+                f"b.apply_variant(r, e, c, {tuple(enabled)!r});"
+                "import numpy as np; from pathlib import Path;"
+                f"a = np.load({str(Path(args.data_dir) / 'audio.npy')!r});"
+                f"h, s = b.run_once(Path({str(root)!r}), {model!r}, a);"
+                "print(json.dumps([h, s]))"
             )
-            np.save(Path(args.data_dir) / "audio.npy", audio)
             out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                                  env={**os.environ, "PYTHONPATH": os.getcwd()})
             if out.returncode != 0:
-                print(out.stderr[-2000:], file=sys.stderr)
+                print(f"   {model} {label}: 失敗\n{out.stderr[-2000:]}", file=sys.stderr)
                 continue
             import json
 
             hyp, sec = json.loads(out.stdout.strip().splitlines()[-1])
-            rows.append((model, "改善前", cer(reference, hyp), sec / seconds, hyp))
-            print(f"   {model} 改善前 CER={rows[-1][2]:.1%} RTF={rows[-1][3]:.2f}", file=sys.stderr)
+            rows.append((model, label, cer(reference, hyp), sec / seconds, hyp))
+            print(f"   {model} {label}: CER={rows[-1][2]:.1%} RTF={rows[-1][3]:.2f}", file=sys.stderr)
 
     print(f"### 日本語文字起こしベンチマーク（{voice} の読み上げ {seconds:.0f} 秒・背景ノイズあり）\n")
     print("| モデル | 処理 | 文字誤り率 (CER) ↓ | 処理時間 / 音声長 ↓ |")
     print("| --- | --- | --- | --- |")
-    for model, label, c, rtf, _ in sorted(rows, key=lambda r: (r[0], r[1] != "改善前")):
+    for model, label, c, rtf, _ in rows:
         print(f"| {model} | {label} | {c:.1%} | {rtf:.2f} |")
     print("\n<details><summary>認識結果</summary>\n")
     print(f"**正解**: {reference}\n")
