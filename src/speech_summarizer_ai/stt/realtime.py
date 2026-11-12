@@ -36,21 +36,15 @@ _HALLUCINATION_STRONG: tuple[str, ...] = (
     "字幕",
     "次回もお楽しみに",
 )
-# 弱い目印: 実際の会議でも言う語。発話がほぼこれだけのときに限り幻覚とみなす。
-_HALLUCINATION_WEAK: tuple[str, ...] = (
-    "ありがとうございました",
-    "お疲れ様でした",
-    "おやすみなさい",
-    "ではまた",
-)
 _PUNCT = "。、.!！?？・…「」 "
 
 
 def is_probable_hallucination(text: str) -> bool:
     """無音・雑音から生成された定型文（幻覚）らしいかを判定する。
 
-    実際の発言に含まれる「ありがとうございました」等は残したいので、弱い目印は
-    発話がほぼそれだけのときに限る。同じ語の連続反復も幻覚とする。
+    会議でも普通に言う「ありがとうございました」「お疲れ様でした」は対象にしない
+    （単独のセグメントとして認識された実際の発言を捨ててしまうため。計測で確認）。
+    同じ語の連続反復は幻覚とする。
 
     Args:
         text: 認識テキスト。
@@ -63,12 +57,6 @@ def is_probable_hallucination(text: str) -> bool:
         return True
     if len(t) <= 40 and any(ph in t for ph in _HALLUCINATION_STRONG):
         return True
-    if any(ph in t for ph in _HALLUCINATION_WEAK):
-        rest = t
-        for ph in _HALLUCINATION_WEAK:
-            rest = rest.replace(ph, "")
-        if len(rest.strip(_PUNCT)) <= 1:
-            return True
     # 「あああああ」「はいはいはいはい…」のような反復
     for n in (1, 2, 3, 4):
         if len(t) >= n * 6:
@@ -270,7 +258,8 @@ def run_realtime_transcription_loop(
             pcm = pcm[max_samples:]
             piece_t0_sec = offset_samps / sr
             ctx_chars = config.STT_CONTEXT_PROMPT_CHARS
-            prompt = recent_text[-ctx_chars:] if ctx_chars > 0 else None
+            use_prompt = ctx_chars > 0 and loaded_folder in config.STT_CONTEXT_PROMPT_MODELS
+            prompt = recent_text[-ctx_chars:] if use_prompt else None
             try:
                 result = tr_use.transcribe_int16_mono(
                     piece,

@@ -53,7 +53,7 @@ def test_normalize_level_boosts_quiet_but_not_loud() -> None:
 @pytest.mark.parametrize(
     "text",
     ["ご視聴ありがとうございました", "ご視聴ありがとうございました。", "チャンネル登録よろしくお願いします",
-     "字幕", "ありがとうございました。", "ああああああああ", "はいはいはいはいはいはいはい", "  "],
+     "字幕", "ああああああああ", "はいはいはいはいはいはいはい", "  "],
 )
 def test_hallucinations_are_dropped(text: str) -> None:
     assert realtime.is_probable_hallucination(text)
@@ -62,7 +62,7 @@ def test_hallucinations_are_dropped(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     ["本日はありがとうございました。次回は来週火曜日です。", "予算の件、ありがとうございました", "はい", "了解です",
-     "お疲れ様でした、では資料を共有します"],
+     "お疲れ様でした、では資料を共有します", "お疲れ様でした。", "ありがとうございました。"],
 )
 def test_real_speech_is_kept(text: str) -> None:
     assert not realtime.is_probable_hallucination(text)
@@ -126,7 +126,7 @@ def test_realtime_segmentation_merges_short_pauses_and_passes_context(monkeypatc
     errors: list[str] = []
     realtime.run_realtime_transcription_loop(
         stop_event=stop, audio_queue=q, project_root=tmp_path,
-        get_model_folder=lambda: "kotoba",
+        get_model_folder=lambda: "small",
         emit_text=lambda t, s: out.append((t, s)), emit_error=errors.append,
     )
     assert not errors
@@ -141,3 +141,23 @@ def test_realtime_segmentation_merges_short_pauses_and_passes_context(monkeypatc
     assert calls[2]["initial_prompt"] == "発話1です。"
     # タイムスタンプは録音先頭からの秒
     assert out[1][1] == pytest.approx(1.5 + 0.4 + 1.5 + 1.5 + 2.0 + 1.5, abs=0.05)
+
+
+def test_context_prompt_not_used_for_kotoba(monkeypatch, tmp_path) -> None:
+    """kotoba（蒸留モデル）は文脈ヒントで大きく劣化するため渡さない。"""
+    _FakeTranscriber.calls = []
+    monkeypatch.setattr(realtime, "FastWhisperTranscriber", _FakeTranscriber)
+    monkeypatch.setattr(realtime, "_webrtcvad_module", lambda: None)
+    audio = np.concatenate([_speech(5.0), _silence(1.0), _speech(5.0), _silence(1.0), _speech(5.0), _silence(1.0)])
+    q: queue.Queue = queue.Queue()
+    for i in range(0, audio.size, 4800):
+        q.put(audio[i : i + 4800])
+    stop = threading.Event()
+    stop.set()
+    realtime.run_realtime_transcription_loop(
+        stop_event=stop, audio_queue=q, project_root=tmp_path,
+        get_model_folder=lambda: "kotoba",
+        emit_text=lambda t, s: None, emit_error=lambda e: None,
+    )
+    assert len(_FakeTranscriber.calls) == 3
+    assert all(c["initial_prompt"] is None for c in _FakeTranscriber.calls)
