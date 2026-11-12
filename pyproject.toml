@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speech-summarizer-ai"
+version = "0.1.0"
+description = "Speech Summarizer AI — Windows デスクトップ向けの録音・文字起こし・要約アプリ。"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "WEEL" }]
+keywords = ["speech-to-text", "summarization", "whisper", "foundry-local", "desktop"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 直接 import しているサードパーティのみを抽象的に宣言する。
+# 推移依存は pip が自動解決する。再現性が必要な環境は requirements.txt を使う。
+dependencies = [
+    "PySide6>=6.9,<7",
+    "winrt-Windows.Storage>=2.0; platform_system == 'Windows'",
+    "winrt-runtime>=2.0; platform_system == 'Windows'",
+    "numpy>=2.0",
+    "PyAudioWPatch>=0.2.12",
+    "webrtcvad-wheels>=2.0.14",
+    "faster-whisper>=1.0.0",
+    "ctranslate2>=4.0.0",
+    "huggingface-hub>=0.28.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Windows での Foundry Local（WinML）による要約モデル推論。
+windows-llm = [
+    "foundry-local-sdk-winml>=1.0.0",
+    "foundry-local-core-winml>=1.0.0",
+    "openai>=2.24.0",
+]
+# PyInstaller でのスタンドアロン EXE ビルド。
+build = [
+    "pyinstaller>=6.19",
+    "pyinstaller-hooks-contrib>=2026.1",
+]
+# 開発・テスト。
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+speech-summarizer-ai = "speech_summarizer_ai.app:main"
+
+[project.urls]
+Homepage = "https://github.com/WEEL/speech-summarizer-ai"
+Issues = "https://github.com/WEEL/speech-summarizer-ai/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["speech_summarizer_ai*"]
+
+[tool.setuptools.package-data]
+# Python パッケージに同梱する追加ファイル。アイコン等は resources/ で配布されるため、
+# ここでは現状同梱すべきものはない。将来的に src/speech_summarizer_ai/resources/... を
+# 作った場合はここに追記する。
+"speech_summarizer_ai" = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
