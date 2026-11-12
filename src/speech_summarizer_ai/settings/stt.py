@@ -53,3 +53,7 @@ STT_BEAM_SIZE: int = 5
 
 # 直前の認識結果をヒントとして渡す文字数（用語・表記・句読点の一貫性が上がる）。0 で無効。
 STT_CONTEXT_PROMPT_CHARS: int = 120
+
+# 文脈ヒントを使うモデル。scripts/stt_benchmark.py の計測で、small は改善（CER 5.3%→3.3%）、
+# kotoba（蒸留モデル）は文が丸ごと欠落して大幅に悪化（2.0%→59.8%）、base も悪化したため small のみ。
+STT_CONTEXT_PROMPT_MODELS: tuple[str, ...] = ("small",)

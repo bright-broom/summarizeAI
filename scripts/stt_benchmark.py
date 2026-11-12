@@ -113,11 +113,19 @@ VARIANTS: dict[str, tuple[str, ...]] = {
     "+幻覚除去": ("filter",),
     "すべて": FEATURES,
     "文脈ヒント以外": tuple(f for f in FEATURES if f != "prompt"),
+    # 実際に配布する設定そのもの（差し替えなし）
+    "採用設定": ("__shipped__",),
 }
 
 
 def apply_variant(realtime_mod, engine_mod, config, enabled: tuple[str, ...]) -> None:
     """有効にしない改善を、改善前の処理に戻す（比較用）。"""
+
+    if enabled == ("__shipped__",):
+        return
+    if "prompt" in enabled:
+        # 比較のため、どのモデルでも文脈ヒントを使う
+        config.STT_CONTEXT_PROMPT_MODELS = ("base", "small", "kotoba", "medium", "large")
 
     def naive_resample(x, *, src_sr, dst_sr):
         n_out = max(1, int(round(x.size * dst_sr / src_sr)))
@@ -184,7 +192,7 @@ def main() -> int:
 
     rows: list[tuple[str, str, float, float, str]] = []
     np.save(Path(args.data_dir) / "audio.npy", audio)
-    variants = VARIANTS if args.legacy else {"すべて": FEATURES}
+    variants = VARIANTS if args.legacy else {"採用設定": ("__shipped__",)}
     for model in args.models:
         print(f"== {model}: ダウンロード", file=sys.stderr)
         download_stt_model(root, model)
