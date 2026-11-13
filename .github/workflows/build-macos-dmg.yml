@@ -78,6 +78,11 @@ jobs:
           test "$WANT" = "$GOT"
           if [ -n "$RELEASE_TAG" ]; then test "v$WANT" = "$RELEASE_TAG" || { echo "タグ $RELEASE_TAG と pyproject の版数 $WANT が一致しません"; exit 1; }; fi
 
+      # 配布する .app そのもので自動アップデート（確認→ダウンロード→照合→入れ替え→再起動）を通す。
+      # 失敗したら配信しない（壊れた更新機能を出すと、次の版を自動で届けられなくなるため）。
+      - name: E2E test of automatic update
+        run: ./scripts/e2e_update_test.sh "dist/Speech Summarizer AI.app"
+
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:

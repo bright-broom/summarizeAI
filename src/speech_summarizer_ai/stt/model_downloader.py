@@ -880,8 +880,8 @@ def main() -> None:
     root = args.project_root if args.project_root is not None else paths.project_root()
 
     if args.all:
-        paths = download_all_stt_models(root)
-        for k, p in paths.items():
+        downloaded = download_all_stt_models(root)
+        for k, p in downloaded.items():
             print(f"{k}: {p}")
     elif args.model is not None:
         p = download_stt_model(root, args.model)

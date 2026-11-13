@@ -216,6 +216,33 @@ def _run_bundle_selftest() -> int:
     return 1 if failed else 0
 
 
+def _run_update_selftest() -> int:
+    """``SSAI_UPDATE_SELFTEST=1`` のとき、画面を出さずに自動アップデートを 1 回実行する（CI の E2E 用）。
+
+    実際の配布物と同じ経路（最新版の確認 → ダウンロード → 照合 → DMG 展開 → 署名確認 →
+    終了後の入れ替えと再起動の予約）を通す。
+
+    Returns:
+        int: 入れ替えを予約できたら 0、更新なし・失敗は 1。
+    """
+    from speech_summarizer_ai import updater  # noqa: PLC0415
+
+    print(f"[update-selftest] current={updater.__version__} app={updater.current_app_bundle()}", flush=True)
+    info = updater.check_for_update()
+    if info is None:
+        print("[update-selftest] no update found", flush=True)
+        return 1
+    print(f"[update-selftest] found {info.tag} {info.asset_name} sha256={info.sha256}", flush=True)
+    try:
+        new_app, work = updater.prepare_update(info)
+        updater.schedule_swap_and_relaunch(new_app, work)
+    except Exception as e:  # noqa: BLE001
+        print(f"[update-selftest] FAILED: {type(e).__name__}: {e}", flush=True)
+        return 1
+    print(f"[update-selftest] swap scheduled: {new_app}", flush=True)
+    return 0
+
+
 def main() -> int:
     """GUI アプリケーションを初期化し、メインループを実行する。
 
@@ -224,6 +251,8 @@ def main() -> int:
     """
     if os.environ.get("SSAI_SELFTEST") == "1":
         return _run_bundle_selftest()
+    if os.environ.get("SSAI_UPDATE_SELFTEST") == "1":
+        return _run_update_selftest()
     _redirect_output_when_bundled()
     _prepare_windows_pyside_dlls()
     _set_windows_app_user_model_id()

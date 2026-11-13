@@ -126,7 +126,7 @@ def _summary_save_discard_cancel_dialog(
     mb.setText(text)
     b_save = mb.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
     b_discard = mb.addButton("保存しない", QMessageBox.ButtonRole.DestructiveRole)
-    b_cancel = mb.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+    mb.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
     mb.setDefaultButton(b_save)
     mb.exec()
     clicked = mb.clickedButton()
