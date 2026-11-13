@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 import types
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import pytest
 
 class _FakeRawStream:
     def __init__(self, samplerate, channels, dtype, blocksize, device, latency):
+        self.samplerate = samplerate
         self.channels = channels
         self.device = device
         self.active = False
@@ -28,6 +30,9 @@ class _FakeRawStream:
         pass
 
     def read(self, n):
+        # 実デバイスと同じく、n サンプル分の時間だけ待ってから返す（即時に返すと録音側が
+        # 実時間より速くキューを積み上げ、遅いマシンでは停止後の処理に時間がかかる）
+        time.sleep(n / self.samplerate)
         return bytes(np.full(n * self.channels, 1000, dtype=np.int16).tobytes()), False
 
 

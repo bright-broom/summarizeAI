@@ -29,6 +29,11 @@ from speech_summarizer_ai import __version__
 from speech_summarizer_ai import settings as config
 
 _API = "https://api.github.com/repos/{repo}/releases/latest"
+
+
+def _latest_release_url(repo: str) -> str:
+    """最新版情報の URL。``SSAI_UPDATE_API_URL`` はテスト（偽のリリースサーバー）専用の差し替え。"""
+    return os.environ.get("SSAI_UPDATE_API_URL", "").strip() or _API.format(repo=repo)
 _TIMEOUT = httpx.Timeout(15.0, read=60.0)
 
 
@@ -90,7 +95,7 @@ def check_for_update(*, repo: str | None = None, client: httpx.Client | None = N
     c = client or httpx.Client(timeout=_TIMEOUT, follow_redirects=True)
     try:
         r = c.get(
-            _API.format(repo=repo),
+            _latest_release_url(repo),
             headers={
                 "Accept": "application/vnd.github+json",
                 "User-Agent": f"SpeechSummarizerAI/{__version__}",
