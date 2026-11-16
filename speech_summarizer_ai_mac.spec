@@ -187,7 +187,7 @@ if sys.platform == "darwin":
             "CFBundleShortVersionString": APP_VERSION,
             "CFBundleVersion": APP_VERSION,
             "CFBundleDevelopmentRegion": "ja",
-            "LSMinimumSystemVersion": "13.0",
+            "LSMinimumSystemVersion": "14.0",  # 同梱の MLX（macosx_14_0 ビルド）の最低要件
             "LSApplicationCategoryType": "public.app-category.productivity",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,

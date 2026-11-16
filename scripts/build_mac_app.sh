@@ -44,6 +44,32 @@ VERSION="$(python -c 'import speech_summarizer_ai as m; print(m.__version__)')"
 ARCH="$(uname -m)"
 pip install -q "pyinstaller>=6.19" "pyinstaller-hooks-contrib>=2026.1"
 
+# MLX（要約 AI）は macOS のバージョン別に別ビルドが配布されている（macosx_14 / 15 / 26）。
+# pip はビルド機の macOS に合わせて選ぶため、最新 macOS でビルドすると「その macOS 専用」
+# （Metal 4 前提）になり、古い macOS の Mac で要約が失敗する（v0.1.2 の不具合）。
+# 配布先の最低バージョン向けのビルドに差し替える（新しい macOS でもそのまま動く）。
+MLX_MIN_MACOS="${MLX_MIN_MACOS:-14.0}"
+if [[ "$(uname -m)" == "arm64" ]] && python -c "import mlx" 2>/dev/null; then
+  echo "==> MLX を macOS ${MLX_MIN_MACOS} 以降で動くビルドに固定"
+  MLX_VER="$(python -c 'import importlib.metadata as m; print(m.version("mlx"))')"
+  PYVER="$(python -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+  PLAT="macosx_${MLX_MIN_MACOS//./_}_arm64"
+  WHEELS="$(mktemp -d)"
+  pip download -q --no-deps --only-binary=:all: --platform "$PLAT" --python-version "$PYVER" \
+    -d "$WHEELS" "mlx==${MLX_VER}" "mlx-metal==${MLX_VER}"
+  pip install -q --force-reinstall --no-deps "$WHEELS"/*.whl
+  rm -rf "$WHEELS"
+  python - "$PLAT" <<'PY'
+import importlib.metadata as m, sys
+want = sys.argv[1]
+for dist in ("mlx", "mlx-metal"):
+    tags = [l.split(":", 1)[1].strip() for l in (m.distribution(dist).read_text("WHEEL") or "").splitlines() if l.startswith("Tag:")]
+    print(f"   {dist} {m.version(dist)}: {', '.join(tags)}")
+    if not any(t.endswith(want) for t in tags):
+        sys.exit(f"{dist} が {want} 向けになっていません: {tags}")
+PY
+fi
+
 # 2) ビルド
 echo "==> .app をビルド中（数分かかります）"
 rm -rf build "dist/SpeechSummarizerAI" "$APP"
