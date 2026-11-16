@@ -207,6 +207,16 @@ def _run_bundle_selftest() -> int:
             v = mx.array([1.0, 2.0]) * 2
             mx.eval(v)
             print(f"[selftest] OK   mlx compute {v.tolist()}", flush=True)
+            # 要約（LLM）と同じ種類の GPU（Metal）カーネルを実際に動かす。
+            # ビルド機の macOS でしか動かない Metal で作られていると、ここで失敗する。
+            if mx.metal.is_available():
+                a = mx.random.normal((64, 64), dtype=mx.float16)
+                y = mx.softmax(a @ a.T, axis=-1).sum()
+                mx.eval(y)
+                print(f"[selftest] OK   mlx gpu {mx.default_device()} sum={float(y):.1f}", flush=True)
+            else:
+                failed += 1
+                print("[selftest] FAIL mlx gpu: Metal is not available", flush=True)
             from transformers import AutoTokenizer  # noqa: F401, PLC0415
 
             print("[selftest] OK   transformers.AutoTokenizer", flush=True)
