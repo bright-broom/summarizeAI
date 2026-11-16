@@ -24,6 +24,9 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+
 jobs:
   build:
     runs-on: macos-latest  # Apple Silicon (arm64)
@@ -35,8 +38,6 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      RELEASES_REPO_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
-      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -90,8 +91,45 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
+  # 配布先の Mac は最新の macOS とは限らない。ビルド機（最新 macOS）でしか動かない部品が
+  # 混ざっていないか、古い macOS で実際に起動して確認する（v0.1.2 で要約が Metal 4 前提になった不具合の再発防止）。
+  compat:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SpeechSummarizerAI-macOS-dmg
+          path: dist
+
+      - name: Run the app on an older macOS
+        env:
+          SSAI_SELFTEST: "1"
+        run: |
+          sw_vers
+          DMG="$(ls dist/*.dmg | head -1)"
+          MNT="$RUNNER_TEMP/mnt"; mkdir -p "$MNT"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          ditto "$MNT/Speech Summarizer AI.app" "$RUNNER_TEMP/app/Speech Summarizer AI.app"
+          hdiutil detach "$MNT"
+          "$RUNNER_TEMP/app/Speech Summarizer AI.app/Contents/MacOS/SpeechSummarizerAI" | tee "$RUNNER_TEMP/selftest.log"
+          grep -q "OK   mlx gpu" "$RUNNER_TEMP/selftest.log"
+
+  release:
+    needs: [build, compat]
+    if: needs.build.result == 'success' && needs.compat.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASES_REPO_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SpeechSummarizerAI-macOS-dmg
+          path: dist
+
       - name: Write release notes
-        if: env.RELEASE_TAG != ''
         run: |
           cat > "$RUNNER_TEMP/notes.md" <<'MD'
           ## インストール（Apple Silicon の Mac 専用）
@@ -116,7 +154,6 @@ jobs:
           MD
 
       - name: Attach DMG to release
-        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
@@ -126,7 +163,7 @@ jobs:
       # 自動アップデートの配信先（公開リポジトリ）にも載せる。
       # Secret RELEASES_REPO_TOKEN（配布用リポジトリだけに Contents: Read and write を許可したトークン）が必要。
       - name: Publish to public releases repository (auto-update)
-        if: env.RELEASE_TAG != '' && env.RELEASES_REPO_TOKEN != ''
+        if: env.RELEASES_REPO_TOKEN != ''
         uses: softprops/action-gh-release@v2
         with:
           repository: bright-broom/summarizeAI-releases
